@@ -4,6 +4,7 @@ import io.jmix.core.Messages;
 import org.magic.addons.minio.MinioProperties;
 import org.magic.addons.minio.dto.*;
 import io.minio.*;
+import io.minio.messages.DeleteError;
 import io.minio.messages.DeleteObject;
 import io.minio.messages.Item;
 import org.slf4j.Logger;
@@ -174,17 +175,33 @@ public class MinioService {
 
     public void deleteBucket(String name) {
         try {
+            // 先删除 Bucket 中的所有对象
             Iterable<io.minio.Result<Item>> items = getClient().listObjects(
                     ListObjectsArgs.builder().bucket(name).recursive(true).build()
             );
-            if (items.iterator().hasNext()) {
-                throw new IllegalStateException(msg("service.bucketNotEmpty"));
+
+            // 收集所有对象名称
+            List<DeleteObject> objectsToDelete = new ArrayList<>();
+            for (io.minio.Result<Item> result : items) {
+                objectsToDelete.add(new DeleteObject(result.get().objectName()));
             }
+
+            // 批量删除对象
+            if (!objectsToDelete.isEmpty()) {
+                log.info(msg("service.deletingBucketObjects"), name, objectsToDelete.size());
+                Iterable<io.minio.Result<DeleteError>> errors = getClient().removeObjects(
+                        RemoveObjectsArgs.builder().bucket(name).objects(objectsToDelete).build()
+                );
+                // 检查是否有删除错误
+                for (io.minio.Result<DeleteError> error : errors) {
+                    log.warn(msg("service.deleteObjectFailed"), error.get().objectName(), error.get().message());
+                }
+            }
+
+            // 删除空 Bucket
             getClient().removeBucket(RemoveBucketArgs.builder().bucket(name).build());
-        } catch (IllegalStateException e) {
-            throw e;
         } catch (Exception e) {
-            log.error("删除 Bucket 失败: {}", name, e);
+            log.error(msg("service.bucketDeleteFailedLog"), name, e);
             throw new RuntimeException(msg("service.bucketDeleteFailed", e.getMessage()), e);
         }
     }
