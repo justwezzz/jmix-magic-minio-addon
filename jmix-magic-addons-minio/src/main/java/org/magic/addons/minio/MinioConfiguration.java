@@ -11,10 +11,6 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.PropertySource;
 
-import jakarta.annotation.PostConstruct;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.Collections;
 
 /**
@@ -25,13 +21,6 @@ import java.util.Collections;
 @JmixModule(dependsOn = {FlowuiConfiguration.class, SecurityConfiguration.class})
 @PropertySource(name = "org.magic.addons.minio", value = "classpath:/org/magic/addons/minio/module.properties")
 public class MinioConfiguration {
-
-    private static final Logger log = LoggerFactory.getLogger(MinioConfiguration.class);
-
-    @PostConstruct
-    public void init() {
-        log.info("=== MinioConfiguration initialized ===");
-    }
 
     @Bean("minio_ViewControllers")
     public ViewControllersConfiguration viewControllersConfiguration(

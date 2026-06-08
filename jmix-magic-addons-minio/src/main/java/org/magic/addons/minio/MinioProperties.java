@@ -1,6 +1,5 @@
 package org.magic.addons.minio;
 
-import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -11,7 +10,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * jmix.minio.access-key=minioadmin
  * jmix.minio.secret-key=minioadmin
  */
-@Data
 @ConfigurationProperties(prefix = "jmix.minio")
 public class MinioProperties {
 
@@ -40,7 +38,50 @@ public class MinioProperties {
      */
     private Upload upload = new Upload();
 
-    @Data
+    // ==================== Getters & Setters ====================
+
+    public String getEndpoint() {
+        return endpoint;
+    }
+
+    public void setEndpoint(String endpoint) {
+        this.endpoint = endpoint;
+    }
+
+    public String getAccessKey() {
+        return accessKey;
+    }
+
+    public void setAccessKey(String accessKey) {
+        this.accessKey = accessKey;
+    }
+
+    public String getSecretKey() {
+        return secretKey;
+    }
+
+    public void setSecretKey(String secretKey) {
+        this.secretKey = secretKey;
+    }
+
+    public Download getDownload() {
+        return download;
+    }
+
+    public void setDownload(Download download) {
+        this.download = download;
+    }
+
+    public Upload getUpload() {
+        return upload;
+    }
+
+    public void setUpload(Upload upload) {
+        this.upload = upload;
+    }
+
+    // ==================== Inner classes ====================
+
     public static class Download {
         /**
          * ZIP 打包最大文件数
@@ -51,13 +92,36 @@ public class MinioProperties {
          * 单文件最大大小
          */
         private String maxSize = "100MB";
+
+        public int getMaxFiles() {
+            return maxFiles;
+        }
+
+        public void setMaxFiles(int maxFiles) {
+            this.maxFiles = maxFiles;
+        }
+
+        public String getMaxSize() {
+            return maxSize;
+        }
+
+        public void setMaxSize(String maxSize) {
+            this.maxSize = maxSize;
+        }
     }
 
-    @Data
     public static class Upload {
         /**
          * 上传最大大小
          */
         private String maxSize = "50MB";
+
+        public String getMaxSize() {
+            return maxSize;
+        }
+
+        public void setMaxSize(String maxSize) {
+            this.maxSize = maxSize;
+        }
     }
 }

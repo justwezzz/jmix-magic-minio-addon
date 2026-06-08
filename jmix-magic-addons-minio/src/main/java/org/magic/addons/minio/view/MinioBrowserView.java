@@ -42,13 +42,12 @@ import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
 import com.vaadin.flow.data.renderer.ComponentRenderer;
 import com.vaadin.flow.server.streams.DownloadHandler;
 import com.vaadin.flow.server.streams.DownloadResponse;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 
 import io.jmix.flowui.view.MessageBundle;
-
-import jakarta.annotation.PostConstruct;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -73,19 +72,19 @@ import java.util.concurrent.atomic.AtomicReference;
 @Route(value = "minio", layout = DefaultMainViewParent.class)
 @ViewController(id = "minio_BrowserView")
 @ViewDescriptor(path = "minio/minio-browser-view.xml")
-@Slf4j
 public class MinioBrowserView extends StandardView {
 
-    @PostConstruct
-    public void initBean() {
-        log.info("=== MinioBrowserView bean created ===");
-    }
+    private static final Logger log = LoggerFactory.getLogger(MinioBrowserView.class);
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @Autowired
     private MinioService minioService;
 
     @Autowired
     private DataComponents dataComponents;
+
+    @Autowired
+    private io.jmix.core.Messages messages;
 
     @ViewComponent
     private MessageBundle messageBundle;
@@ -216,7 +215,7 @@ public class MinioBrowserView extends StandardView {
             if (date == null) {
                 return new Span("-");
             }
-            String formatted = date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+            String formatted = date.format(DATE_TIME_FORMATTER);
             return new Span(formatted);
         })).setHeader(msg("minioBrowserView.columnCreationDate")).setKey("creationDateFormatted").setAutoWidth(true);
 
@@ -451,7 +450,7 @@ public class MinioBrowserView extends StandardView {
             }
             if (validateBucketName(newName)) {
                 try {
-                    renameBucket(selected.getName(), newName);
+                    minioService.renameBucket(selected.getName(), newName);
                     dialog.close();
                     loadBuckets();
                     clearFileTree();
@@ -469,56 +468,6 @@ public class MinioBrowserView extends StandardView {
         dialog.getFooter().add(cancelButton, renameButton);
         dialog.open();
         nameField.focus();
-    }
-
-    private void renameBucket(String oldName, String newName) {
-        // 重命名 Bucket：MinIO 不支持直接重命名，需要复制所有对象到新 Bucket 并删除原 Bucket
-        try {
-            // 1. 创建新 Bucket
-            minioService.createBucket(newName);
-
-            // 2. 复制所有对象
-            Iterable<io.minio.Result<io.minio.messages.Item>> objects =
-                minioService.getMinioClient().listObjects(
-                    io.minio.ListObjectsArgs.builder()
-                        .bucket(oldName)
-                        .recursive(true)
-                        .build()
-                );
-
-            for (io.minio.Result<io.minio.messages.Item> result : objects) {
-                io.minio.messages.Item item = result.get();
-                String objectName = item.objectName();
-
-                minioService.getMinioClient().copyObject(
-                    io.minio.CopyObjectArgs.builder()
-                        .bucket(newName)
-                        .object(objectName)
-                        .source(io.minio.CopySource.builder()
-                            .bucket(oldName)
-                            .object(objectName)
-                            .build())
-                        .build()
-                );
-            }
-
-            // 3. 删除原 Bucket（必须先清空）
-            for (io.minio.Result<io.minio.messages.Item> result : objects) {
-                io.minio.messages.Item item = result.get();
-                minioService.getMinioClient().removeObject(
-                    io.minio.RemoveObjectArgs.builder()
-                        .bucket(oldName)
-                        .object(item.objectName())
-                        .build()
-                );
-            }
-
-            // 4. 删除空 Bucket
-            minioService.deleteBucket(oldName);
-
-        } catch (Exception e) {
-            throw new RuntimeException(String.format(msg("minioBrowserView.renameError"), e.getMessage()), e);
-        }
     }
 
     private boolean validateBucketName(String name) {
@@ -551,7 +500,7 @@ public class MinioBrowserView extends StandardView {
     }
 
     private void showNotification(String message, NotificationVariant variant) {
-        Notification notification = new Notification(message, 3000);
+        Notification notification = new Notification(message, 3000, Notification.Position.BOTTOM_END);
         notification.addThemeVariants(variant);
         notification.open();
     }
@@ -708,7 +657,7 @@ public class MinioBrowserView extends StandardView {
 
         fileTreeGrid.addColumn(node -> {
             if (node.getLastModified() == null) return "-";
-            return node.getLastModified().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+            return node.getLastModified().format(DATE_TIME_FORMATTER);
         }).setHeader(msg("minioBrowserView.columnLastModified")).setKey("lastModified").setWidth("150px");
 
         // Shift + 点击范围选择（使用 ClientItemToggleListener）
@@ -806,7 +755,7 @@ public class MinioBrowserView extends StandardView {
         content.setSpacing(true);
 
         // 路径选择器
-        PathSelector pathSelector = new PathSelector(minioService);
+        PathSelector pathSelector = new PathSelector(minioService, messages);
         pathSelector.setBucket(selectedBucket.getName());
         pathSelector.setSelectedPath(inferDefaultPath());
 
@@ -865,7 +814,7 @@ public class MinioBrowserView extends StandardView {
         content.setSpacing(true);
 
         // 路径选择器
-        PathSelector pathSelector = new PathSelector(minioService);
+        PathSelector pathSelector = new PathSelector(minioService, messages);
         pathSelector.setBucket(selectedBucket.getName());
         pathSelector.setSelectedPath(inferDefaultPath());
 
@@ -928,7 +877,7 @@ public class MinioBrowserView extends StandardView {
         content.setSpacing(true);
 
         // 路径选择器
-        PathSelector pathSelector = new PathSelector(minioService);
+        PathSelector pathSelector = new PathSelector(minioService, messages);
         pathSelector.setBucket(selectedBucket.getName());
         pathSelector.setSelectedPath(inferDefaultPath());
 
@@ -1315,7 +1264,7 @@ public class MinioBrowserView extends StandardView {
             // 修改时间列
             searchResultGrid.addColumn(node -> {
                 if (node.getLastModified() == null) return "-";
-                return node.getLastModified().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+                return node.getLastModified().format(DATE_TIME_FORMATTER);
             }).setHeader(msg("minioBrowserView.columnLastModified")).setWidth("150px");
 
             // 双击定位到文件树
@@ -1522,43 +1471,10 @@ public class MinioBrowserView extends StandardView {
             if (item.getType() == NodeType.FILE) {
                 count++;
             } else if (item.getType() == NodeType.FOLDER) {
-                // 递归统计文件夹中的文件数
-                count += countFilesInFolder(item.getBucket(), item.getPath());
+                count += minioService.countFiles(item.getBucket(), item.getPath());
             }
         }
         return count;
-    }
-
-    /**
-     * 统计文件夹中的文件数量
-     */
-    private int countFilesInFolder(String bucket, String folderPath) {
-        try {
-            if (!folderPath.endsWith("/")) {
-                folderPath += "/";
-            }
-
-            Iterable<io.minio.Result<io.minio.messages.Item>> results =
-                minioService.getMinioClient().listObjects(
-                    io.minio.ListObjectsArgs.builder()
-                        .bucket(bucket)
-                        .prefix(folderPath)
-                        .recursive(true)
-                        .build()
-                );
-
-            int count = 0;
-            for (io.minio.Result<io.minio.messages.Item> result : results) {
-                io.minio.messages.Item item = result.get();
-                if (!minioService.isPlaceholder(item.objectName()) && !item.isDir()) {
-                    count++;
-                }
-            }
-            return count;
-        } catch (Exception e) {
-            log.error("统计文件夹文件数失败: bucket={}, path={}", bucket, folderPath, e);
-            return 0;
-        }
     }
 
     private void downloadSingleFile(MinioTreeNode item) {
@@ -1697,28 +1613,9 @@ public class MinioBrowserView extends StandardView {
      * 递归添加文件夹到 ZIP
      */
     private void addFolderToZip(ZipOutputStream zipOut, String bucket, String folderPath, Set<String> usedEntryNames) throws Exception {
-        if (!folderPath.endsWith("/")) {
-            folderPath += "/";
-        }
+        List<String> objectPaths = minioService.listFolderObjectPaths(bucket, folderPath);
 
-        Iterable<io.minio.Result<io.minio.messages.Item>> results =
-            minioService.getMinioClient().listObjects(
-                io.minio.ListObjectsArgs.builder()
-                    .bucket(bucket)
-                    .prefix(folderPath)
-                    .recursive(true)
-                    .build()
-            );
-
-        for (io.minio.Result<io.minio.messages.Item> result : results) {
-            io.minio.messages.Item item = result.get();
-            String objectName = item.objectName();
-
-            if (minioService.isPlaceholder(objectName) || item.isDir()) {
-                continue;
-            }
-
-            // 使用完整路径作为 entry 名称，确保唯一性
+        for (String objectName : objectPaths) {
             String entryName = getUniqueEntryName(objectName, usedEntryNames);
 
             ZipEntry entry = new ZipEntry(entryName);

@@ -6,7 +6,8 @@ import org.magic.addons.minio.dto.*;
 import io.minio.*;
 import io.minio.messages.DeleteObject;
 import io.minio.messages.Item;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
@@ -22,9 +23,10 @@ import java.util.Iterator;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
-@Slf4j
 @Service
 public class MinioService {
+
+    private static final Logger log = LoggerFactory.getLogger(MinioService.class);
 
     private static final String MSG_PREFIX = "org.magic.addons.minio/";
 
@@ -85,13 +87,6 @@ public class MinioService {
 
     private static boolean eq(String a, String b) {
         return (a == null && b == null) || (a != null && a.equals(b));
-    }
-
-    /**
-     * 获取 MinioClient 实例，用于高级操作。
-     */
-    public MinioClient getMinioClient() {
-        return getClient();
     }
 
     // ==================== 辅助方法 ====================
@@ -191,6 +186,68 @@ public class MinioService {
         } catch (Exception e) {
             log.error("删除 Bucket 失败: {}", name, e);
             throw new RuntimeException(msg("service.bucketDeleteFailed", e.getMessage()), e);
+        }
+    }
+
+    /**
+     * 重命名 Bucket。
+     * MinIO 不支持直接重命名，需要复制所有对象到新 Bucket 再删除原 Bucket。
+     */
+    public void renameBucket(String oldName, String newName) {
+        try {
+            // 1. 创建新 Bucket
+            createBucket(newName);
+
+            // 2. 复制所有对象
+            Iterable<io.minio.Result<Item>> objects = getClient().listObjects(
+                    ListObjectsArgs.builder()
+                            .bucket(oldName)
+                            .recursive(true)
+                            .build()
+            );
+
+            // 收集对象名称，避免二次遍历
+            List<String> objectNames = new ArrayList<>();
+            for (io.minio.Result<Item> result : objects) {
+                Item item = result.get();
+                String objectName = item.objectName();
+                objectNames.add(objectName);
+
+                getClient().copyObject(
+                        CopyObjectArgs.builder()
+                                .bucket(newName)
+                                .object(objectName)
+                                .source(CopySource.builder()
+                                        .bucket(oldName)
+                                        .object(objectName)
+                                        .build())
+                                .build()
+                );
+            }
+
+            // 3. 删除原 Bucket 中的所有对象（批量删除）
+            List<DeleteObject> objectsToDelete = objectNames.stream()
+                    .map(DeleteObject::new)
+                    .collect(Collectors.toList());
+            if (!objectsToDelete.isEmpty()) {
+                getClient().removeObjects(
+                        RemoveObjectsArgs.builder()
+                                .bucket(oldName)
+                                .objects(objectsToDelete)
+                                .build()
+                );
+            }
+
+            // 4. 删除空 Bucket
+            deleteBucket(oldName);
+
+            log.info("重命名 Bucket: {} -> {}", oldName, newName);
+
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("重命名 Bucket 失败: {} -> {}", oldName, newName, e);
+            throw new RuntimeException(msg("service.renameBucketFailed", e.getMessage()), e);
         }
     }
 
@@ -347,6 +404,73 @@ public class MinioService {
         } catch (Exception e) {
             log.error("创建文件夹失败: bucket={}, path={}", bucket, folderPath, e);
             throw new RuntimeException(msg("service.folderCreateFailed", e.getMessage()), e);
+        }
+    }
+
+    /**
+     * 统计文件夹中的文件数量（递归）
+     */
+    public int countFiles(String bucket, String folderPath) {
+        try {
+            if (!folderPath.endsWith("/")) {
+                folderPath += "/";
+            }
+
+            Iterable<io.minio.Result<Item>> results = getClient().listObjects(
+                    ListObjectsArgs.builder()
+                            .bucket(bucket)
+                            .prefix(folderPath)
+                            .recursive(true)
+                            .build()
+            );
+
+            int count = 0;
+            for (io.minio.Result<Item> result : results) {
+                Item item = result.get();
+                if (!isPlaceholder(item.objectName()) && !item.isDir()) {
+                    count++;
+                }
+            }
+            return count;
+        } catch (Exception e) {
+            log.error("统计文件夹文件数失败: bucket={}, path={}", bucket, folderPath, e);
+            return 0;
+        }
+    }
+
+    /**
+     * 列出文件夹中所有文件的对象路径（递归，排除占位文件和目录）
+     *
+     * @param bucket     Bucket 名称
+     * @param folderPath 文件夹路径
+     * @return 文件对象路径列表
+     */
+    public List<String> listFolderObjectPaths(String bucket, String folderPath) {
+        try {
+            if (!folderPath.endsWith("/")) {
+                folderPath += "/";
+            }
+
+            Iterable<io.minio.Result<Item>> results = getClient().listObjects(
+                    ListObjectsArgs.builder()
+                            .bucket(bucket)
+                            .prefix(folderPath)
+                            .recursive(true)
+                            .build()
+            );
+
+            List<String> paths = new ArrayList<>();
+            for (io.minio.Result<Item> result : results) {
+                Item item = result.get();
+                String objectName = item.objectName();
+                if (!isPlaceholder(objectName) && !item.isDir()) {
+                    paths.add(objectName);
+                }
+            }
+            return paths;
+        } catch (Exception e) {
+            log.error("列出文件夹对象失败: bucket={}, path={}", bucket, folderPath, e);
+            throw new RuntimeException(msg("service.fileListFailed", e.getMessage()), e);
         }
     }
 

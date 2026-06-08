@@ -13,7 +13,4 @@ dependencies {
     api 'io.minio:minio:8.5.10'
 
     implementation 'org.springframework.boot:spring-boot-autoconfigure'
-
-    compileOnly 'org.projectlombok:lombok:1.18.30'
-    annotationProcessor 'org.projectlombok:lombok:1.18.30'
 }

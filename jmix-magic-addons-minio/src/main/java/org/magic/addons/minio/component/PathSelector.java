@@ -1,5 +1,6 @@
 package org.magic.addons.minio.component;
 
+import io.jmix.core.Messages;
 import org.magic.addons.minio.dto.MinioTreeNode;
 import org.magic.addons.minio.dto.NodeType;
 import org.magic.addons.minio.service.MinioService;
@@ -15,6 +16,7 @@ import com.vaadin.flow.data.provider.hierarchy.TreeData;
 import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 路径选择器组件
@@ -22,7 +24,10 @@ import java.util.List;
  */
 public class PathSelector extends Composite<VerticalLayout> {
 
+    private static final String MSG_PREFIX = "org.magic.addons.minio/";
+
     private final MinioService minioService;
+    private final Messages messages;
 
     // UI 组件
     private Span breadcrumb;
@@ -35,8 +40,13 @@ public class PathSelector extends Composite<VerticalLayout> {
     private String bucket;
     private String selectedPath = "";
 
-    public PathSelector(MinioService minioService) {
+    public PathSelector(MinioService minioService, Messages messages) {
         this.minioService = minioService;
+        this.messages = messages;
+    }
+
+    private String msg(String key) {
+        return messages.getMessage(MSG_PREFIX + key);
     }
 
     @Override
@@ -47,10 +57,10 @@ public class PathSelector extends Composite<VerticalLayout> {
         layout.setWidthFull();
 
         // 面包屑和返回根目录按钮
-        breadcrumb = new Span("当前路径: 根目录");
+        breadcrumb = new Span(msg("pathSelector.currentPathRoot"));
         breadcrumb.getElement().getThemeList().add("badge contrast");
 
-        rootButton = new Button("根目录", VaadinIcon.HOME.create(), e -> {
+        rootButton = new Button(msg("pathSelector.root"), VaadinIcon.HOME.create(), e -> {
             selectedPath = "";
             treeGrid.deselectAll();
             updateBreadcrumb();
@@ -77,11 +87,10 @@ public class PathSelector extends Composite<VerticalLayout> {
         treeData = new TreeData<>();
 
         // 名称列（使用 HierarchyColumn 显示树形结构和展开箭头）
-        grid.addHierarchyColumn(node -> {
-            // 使用 Unicode 符号作为图标前缀
-            String iconPrefix = node.getType() == NodeType.FOLDER ? "📁 " : "📄 ";
-            return iconPrefix + node.getName();
-        }).setHeader("选择目标文件夹").setKey("name").setAutoWidth(true);
+        grid.addHierarchyColumn(MinioTreeNode::getName)
+                .setHeader(msg("pathSelector.selectFolder"))
+                .setKey("name")
+                .setAutoWidth(true);
 
         // 选择事件
         grid.addSelectionListener(e -> {
@@ -120,7 +129,7 @@ public class PathSelector extends Composite<VerticalLayout> {
         // 收集占位符到新列表（避免并发修改）
         List<MinioTreeNode> placeholders = children.stream()
                 .filter(n -> n.getPath().endsWith(".placeholder"))
-                .collect(java.util.stream.Collectors.toList());
+                .collect(Collectors.toList());
 
         // 移除占位符
         for (MinioTreeNode placeholder : placeholders) {
@@ -132,7 +141,7 @@ public class PathSelector extends Composite<VerticalLayout> {
             List<MinioTreeNode> subFolders = minioService.listObjects(bucket, parent.getPath())
                     .stream()
                     .filter(node -> node.getType() == NodeType.FOLDER)
-                    .collect(java.util.stream.Collectors.toList());
+                    .collect(Collectors.toList());
 
             for (MinioTreeNode folder : subFolders) {
                 treeData.addItem(parent, folder);
@@ -147,19 +156,19 @@ public class PathSelector extends Composite<VerticalLayout> {
 
     private void updateBreadcrumb() {
         if (selectedPath == null || selectedPath.isEmpty()) {
-            breadcrumb.setText("当前路径: 根目录");
+            breadcrumb.setText(msg("pathSelector.currentPathRoot"));
             return;
         }
 
         // 解析路径层级
         String[] parts = selectedPath.replace("/", " ").trim().split("\\s+");
-        StringBuilder display = new StringBuilder("当前路径: ");
+        StringBuilder display = new StringBuilder(msg("pathSelector.currentPathPrefix"));
 
         if (parts.length <= 3) {
             // 3级以内完整显示
             for (String part : parts) {
                 if (!part.isEmpty()) {
-                    display.append("📁 ").append(part).append(" / ");
+                    display.append(part).append(" / ");
                 }
             }
         } else {
@@ -167,7 +176,7 @@ public class PathSelector extends Composite<VerticalLayout> {
             display.append("... / ");
             for (int i = parts.length - 2; i < parts.length; i++) {
                 if (!parts[i].isEmpty()) {
-                    display.append("📁 ").append(parts[i]).append(" / ");
+                    display.append(parts[i]).append(" / ");
                 }
             }
         }
@@ -214,7 +223,7 @@ public class PathSelector extends Composite<VerticalLayout> {
             List<MinioTreeNode> rootFolders = minioService.listObjects(bucket, null)
                     .stream()
                     .filter(node -> node.getType() == NodeType.FOLDER)
-                    .collect(java.util.stream.Collectors.toList());
+                    .collect(Collectors.toList());
 
             // 添加到树根
             for (MinioTreeNode folder : rootFolders) {
@@ -237,7 +246,7 @@ public class PathSelector extends Composite<VerticalLayout> {
         MinioTreeNode placeholder = MinioTreeNode.builder()
                 .id(parent.getPath() + ".placeholder")
                 .type(NodeType.FILE)
-                .name("加载中...")
+                .name(msg("pathSelector.loading"))
                 .path(parent.getPath() + ".placeholder")
                 .bucket(bucket)
                 .build();
