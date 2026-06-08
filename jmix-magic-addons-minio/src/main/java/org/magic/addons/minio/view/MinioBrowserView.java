@@ -103,26 +103,11 @@ public class MinioBrowserView extends StandardView {
     @ViewComponent
     private TextField searchField;
 
-    @ViewComponent
-    private Button createBucketBtn;
-
-    @ViewComponent
-    private Button refreshBucketBtn;
-
-    @ViewComponent
-    private Button createFolderBtn;
-
-    @ViewComponent
-    private Button refreshFileBtn;
-
     @Value("${jmix.minio.download.max-files:1000}")
     private int downloadMaxFiles;
 
     // Shift 选择锚点
     private MinioTreeNode selectionAnchor = null;
-
-    @ViewComponent
-    private Button downloadFileBtn;
 
     private MinioBucketDto selectedBucket;
     private TreeData<MinioTreeNode> treeData;
@@ -170,6 +155,18 @@ public class MinioBrowserView extends StandardView {
     @Subscribe("deleteBucketAction")
     public void onDeleteBucketAction(final ActionPerformedEvent event) {
         onDeleteBucketClick();
+    }
+
+    @Subscribe("createBucketAction")
+    public void onCreateBucketAction(final ActionPerformedEvent event) {
+        showCreateBucketDialog();
+    }
+
+    @Subscribe("refreshBucketAction")
+    public void onRefreshBucketAction(final ActionPerformedEvent event) {
+        loadBuckets();
+        clearFileTree();
+        showNotification(msg("minioBrowserView.bucketListRefreshed"), NotificationVariant.LUMO_SUCCESS);
     }
 
     @Subscribe("uploadFileAction")
@@ -343,18 +340,6 @@ public class MinioBrowserView extends StandardView {
     }
 
     // ==================== Bucket 操作方法 ====================
-
-    @Subscribe(id = "createBucketBtn", subject = "clickListener")
-    public void onCreateBucketBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
-        showCreateBucketDialog();
-    }
-
-    @Subscribe(id = "refreshBucketBtn", subject = "clickListener")
-    public void onRefreshBucketBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
-        loadBuckets();
-        clearFileTree();
-        showNotification(msg("minioBrowserView.bucketListRefreshed"), NotificationVariant.LUMO_SUCCESS);
-    }
 
     private void showCreateBucketDialog() {
         Dialog dialog = new Dialog();
@@ -552,8 +537,8 @@ public class MinioBrowserView extends StandardView {
 
     // ==================== 文件操作方法 ====================
 
-    @Subscribe(id = "createFolderBtn", subject = "clickListener")
-    public void onCreateFolderBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+    @Subscribe("createFolderAction")
+    public void onCreateFolderAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
             showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
             return;
@@ -569,6 +554,19 @@ public class MinioBrowserView extends StandardView {
             return;
         }
         showDeleteConfirmDialog(selected);
+    }
+
+    @Subscribe("downloadAction")
+    public void onDownloadAction(final ActionPerformedEvent event) {
+        doDownloadSelected();
+    }
+
+    @Subscribe("refreshFileAction")
+    public void onRefreshFileAction(final ActionPerformedEvent event) {
+        if (selectedBucket != null) {
+            refreshFileTree();
+            showNotification(msg("minioBrowserView.filesRefreshed"), NotificationVariant.LUMO_SUCCESS);
+        }
     }
 
     @Subscribe("selectAllFilesAction")
@@ -599,34 +597,6 @@ public class MinioBrowserView extends StandardView {
             fileTreeGrid.asMultiSelect().setValue(allItems.stream().collect(Collectors.toSet()));
             showNotification(String.format(msg("minioBrowserView.selectedCount"), allItems.size()), NotificationVariant.LUMO_SUCCESS);
         }
-    }
-
-    @Subscribe(id = "refreshFileBtn", subject = "clickListener")
-    public void onRefreshFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
-        if (selectedBucket != null) {
-            refreshFileTree();
-            showNotification(msg("minioBrowserView.filesRefreshed"), NotificationVariant.LUMO_SUCCESS);
-        }
-    }
-
-    @Subscribe(id = "downloadFileBtn", subject = "clickListener")
-    public void onDownloadFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
-        doDownloadSelected();
-    }
-
-    @Subscribe("fileTreeGrid.ctxDownload")
-    public void onCtxDownload(final ActionPerformedEvent event) {
-        doDownloadSelected();
-    }
-
-    @Subscribe("fileTreeGrid.ctxDelete")
-    public void onCtxDelete(final ActionPerformedEvent event) {
-        Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
-        if (selected.isEmpty()) {
-            showNotification(msg("minioBrowserView.selectFilesToDelete"), NotificationVariant.LUMO_WARNING);
-            return;
-        }
-        showDeleteConfirmDialog(selected);
     }
 
     private void doDownloadSelected() {

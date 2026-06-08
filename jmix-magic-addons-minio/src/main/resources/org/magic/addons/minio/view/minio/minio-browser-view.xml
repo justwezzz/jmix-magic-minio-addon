@@ -3,13 +3,19 @@
       title="msg://minioBrowserView.title"
       focusComponent="bucketDataGrid">
     <actions>
+        <!-- Bucket actions -->
+        <action id="createBucketAction" text="msg://minioBrowserView.createBucket" icon="PLUS"/>
         <action id="renameBucketAction" text="msg://minioBrowserView.renameBucket" icon="EDIT"/>
         <action id="deleteBucketAction" text="msg://minioBrowserView.deleteBucket" icon="TRASH"/>
+        <action id="refreshBucketAction" text="msg://minioBrowserView.refresh" icon="REFRESH"/>
+        <!-- File actions -->
+        <action id="createFolderAction" text="msg://minioBrowserView.createFolder" icon="FOLDER_ADD"/>
         <action id="uploadFileAction" text="msg://minioBrowserView.uploadFile" icon="FILE_ADD"/>
         <action id="uploadFolderAction" text="msg://minioBrowserView.uploadFolder" icon="FOLDER_ADD"/>
-        <action id="deleteFilesAction" text="msg://minioBrowserView.delete" icon="TRASH"/>
-        <action id="selectAllFilesAction" text="msg://minioBrowserView.selectAll" icon="CHECK"/>
         <action id="downloadAction" text="msg://minioBrowserView.download" icon="DOWNLOAD"/>
+        <action id="selectAllFilesAction" text="msg://minioBrowserView.selectAll" icon="CHECK"/>
+        <action id="deleteFilesAction" text="msg://minioBrowserView.delete" icon="TRASH"/>
+        <action id="refreshFileAction" text="msg://minioBrowserView.refresh" icon="REFRESH"/>
     </actions>
     <layout>
         <split id="mainSplit" orientation="HORIZONTAL" width="100%" height="100%"
@@ -18,8 +24,7 @@
             <!-- 左侧：Bucket 列表 -->
             <vbox id="bucketPanel" width="100%" height="100%" padding="false" classNames="pl-xxs pr-s">
                 <hbox id="bucketToolbar" classNames="buttons-panel" width="100%">
-                    <button id="createBucketBtn" text="msg://minioBrowserView.createBucket"
-                            icon="PLUS" themeNames="primary"/>
+                    <button id="createBucketBtn" action="createBucketAction" themeNames="primary"/>
                     <dropdownButton id="bucketMoreBtn" text="msg://minioBrowserView.more"
                                     icon="ELLIPSIS_DOTS_H">
                         <items>
@@ -27,12 +32,19 @@
                             <actionItem id="deleteBucketItem" ref="deleteBucketAction"/>
                         </items>
                     </dropdownButton>
-                    <button id="refreshBucketBtn" icon="REFRESH"/>
+                    <button id="refreshBucketBtn" action="refreshBucketAction"/>
                 </hbox>
 
                 <dataGrid id="bucketDataGrid" width="100%" height="100%"
                           minHeight="400px"
                           selectionMode="SINGLE" metaClass="minio_MinioBucketDto">
+                    <contextMenu>
+                        <item action="createBucketAction" icon="PLUS"/>
+                        <item action="renameBucketAction" icon="EDIT"/>
+                        <item action="deleteBucketAction" icon="TRASH"/>
+                        <separator/>
+                        <item action="refreshBucketAction" icon="REFRESH"/>
+                    </contextMenu>
                 </dataGrid>
 
                 <hbox id="statsBar" classNames="stats-bar" width="100%">
@@ -43,8 +55,7 @@
             <!-- 右侧：文件列表 -->
             <vbox id="filePanel" width="100%" height="100%" padding="false" classNames="pl-s">
                 <hbox id="fileToolbar" classNames="buttons-panel" width="100%">
-                    <button id="createFolderBtn" text="msg://minioBrowserView.createFolder"
-                            icon="FOLDER_ADD"/>
+                    <button id="createFolderBtn" action="createFolderAction"/>
                     <dropdownButton id="uploadBtn" text="msg://minioBrowserView.upload"
                                     icon="UPLOAD">
                         <items>
@@ -52,8 +63,7 @@
                             <actionItem id="uploadFolderItem" ref="uploadFolderAction"/>
                         </items>
                     </dropdownButton>
-                    <button id="downloadFileBtn" text="msg://minioBrowserView.download"
-                            icon="DOWNLOAD"/>
+                    <button id="downloadFileBtn" action="downloadAction"/>
                     <dropdownButton id="fileMoreBtn" text="msg://minioBrowserView.more"
                                     icon="ELLIPSIS_DOTS_H">
                         <items>
@@ -61,7 +71,7 @@
                             <actionItem id="deleteFilesItem" ref="deleteFilesAction"/>
                         </items>
                     </dropdownButton>
-                    <button id="refreshFileBtn" icon="REFRESH"/>
+                    <button id="refreshFileBtn" action="refreshFileAction"/>
                     <textField id="searchField" placeholder="msg://minioBrowserView.searchPlaceholder"
                                clearButtonVisible="true">
                         <prefix>
@@ -73,14 +83,17 @@
                 <treeDataGrid id="fileTreeGrid" width="100%" height="100%"
                               selectionMode="MULTI" metaClass="minio_MinioTreeNode"
                               hierarchyProperty="parent">
-                    <actions showInContextMenuEnabled="false">
-                        <action id="ctxDownload" text="msg://minioBrowserView.download" icon="DOWNLOAD"/>
-                        <action id="ctxDelete" text="msg://minioBrowserView.delete" icon="TRASH"/>
-                    </actions>
                     <contextMenu>
-                        <item action="fileTreeGrid.ctxDownload" icon="DOWNLOAD"/>
+                        <item action="createFolderAction" icon="FOLDER_ADD"/>
+                        <item action="uploadFileAction" icon="FILE_ADD"/>
+                        <item action="uploadFolderAction" icon="FOLDER_ADD"/>
                         <separator/>
-                        <item action="fileTreeGrid.ctxDelete" icon="TRASH"/>
+                        <item action="downloadAction" icon="DOWNLOAD"/>
+                        <separator/>
+                        <item action="selectAllFilesAction" icon="CHECK"/>
+                        <item action="deleteFilesAction" icon="TRASH"/>
+                        <separator/>
+                        <item action="refreshFileAction" icon="REFRESH"/>
                     </contextMenu>
                 </treeDataGrid>
             </vbox>
