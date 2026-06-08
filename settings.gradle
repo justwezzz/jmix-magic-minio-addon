@@ -1,0 +1,4 @@
+rootProject.name = 'jmix-minio-addon'
+
+include 'jmix-magic-addons-minio'
+include 'jmix-magic-addons-minio-starter'

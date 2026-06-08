@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://minioBrowserView.title"
+      focusComponent="bucketDataGrid">
+    <actions>
+        <action id="renameBucketAction" text="msg://minioBrowserView.renameBucket" icon="EDIT"/>
+        <action id="deleteBucketAction" text="msg://minioBrowserView.deleteBucket" icon="TRASH"/>
+        <action id="uploadFileAction" text="msg://minioBrowserView.uploadFile" icon="FILE_ADD"/>
+        <action id="uploadFolderAction" text="msg://minioBrowserView.uploadFolder" icon="FOLDER_ADD"/>
+    </actions>
+    <layout>
+        <split id="mainSplit" orientation="HORIZONTAL" width="100%" height="100%"
+               splitterPosition="30">
+
+            <!-- 左侧：Bucket 列表 -->
+            <vbox id="bucketPanel" width="100%" height="100%" padding="false">
+                <hbox id="bucketToolbar" classNames="buttons-panel" width="100%">
+                    <button id="createBucketBtn" text="msg://minioBrowserView.createBucket"
+                            icon="PLUS" themeNames="primary"/>
+                    <dropdownButton id="bucketMoreBtn" text="msg://minioBrowserView.more"
+                                    icon="ELLIPSIS_DOTS_H">
+                        <items>
+                            <actionItem id="renameBucketItem" ref="renameBucketAction"/>
+                            <actionItem id="deleteBucketItem" ref="deleteBucketAction"/>
+                        </items>
+                    </dropdownButton>
+                    <button id="refreshBucketBtn" icon="REFRESH"/>
+                </hbox>
+
+                <dataGrid id="bucketDataGrid" width="100%" height="100%"
+                          selectionMode="SINGLE" metaClass="minio_MinioBucketDto">
+                </dataGrid>
+            </vbox>
+
+            <!-- 右侧：文件列表 -->
+            <vbox id="filePanel" width="100%" height="100%" padding="false">
+                <hbox id="fileToolbar" classNames="buttons-panel" width="100%">
+                    <button id="createFolderBtn" text="msg://minioBrowserView.createFolder"
+                            icon="FOLDER_ADD"/>
+                    <dropdownButton id="uploadBtn" text="msg://minioBrowserView.upload"
+                                    icon="UPLOAD">
+                        <items>
+                            <actionItem id="uploadFileItem" ref="uploadFileAction"/>
+                            <actionItem id="uploadFolderItem" ref="uploadFolderAction"/>
+                        </items>
+                    </dropdownButton>
+                    <button id="downloadFileBtn" text="msg://minioBrowserView.download"
+                            icon="DOWNLOAD"/>
+                    <button id="deleteFileBtn" text="msg://minioBrowserView.delete"
+                            icon="TRASH"/>
+                    <button id="selectAllFilesBtn" text="全选" icon="CHECK"/>
+                    <button id="refreshFileBtn" icon="REFRESH"/>
+                    <textField id="searchField" placeholder="msg://minioBrowserView.searchPlaceholder"
+                               clearButtonVisible="true" width="15em">
+                        <prefix>
+                            <icon icon="SEARCH"/>
+                        </prefix>
+                    </textField>
+                </hbox>
+
+                <treeDataGrid id="fileTreeGrid" width="100%" height="100%"
+                              selectionMode="MULTI" metaClass="minio_MinioTreeNode"
+                              hierarchyProperty="parent">
+                </treeDataGrid>
+
+                <hbox id="statsBar" classNames="stats-bar" width="100%">
+                    <span id="statsLabel" text="msg://minioBrowserView.selectBucket"/>
+                </hbox>
+            </vbox>
+
+        </split>
+    </layout>
+</view>

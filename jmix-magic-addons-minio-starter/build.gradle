@@ -1,0 +1,10 @@
+plugins {
+    id 'java'
+}
+
+archivesBaseName = 'jmix-magic-addons-minio-starter'
+
+dependencies {
+    api project(':jmix-magic-addons-minio')
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+}

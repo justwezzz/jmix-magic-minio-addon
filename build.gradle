@@ -1,0 +1,49 @@
+plugins {
+    id 'io.jmix' version '2.8.1' apply false
+    id 'java'
+    id 'maven-publish'
+}
+
+group = 'org.magic.addons'
+version = '1.0.0-SNAPSHOT'
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'maven-publish'
+    apply plugin: 'io.jmix'
+
+    group = 'org.magic.addons'
+    version = '1.0.0-SNAPSHOT'
+
+    java {
+        sourceCompatibility = '17'
+        targetCompatibility = '17'
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+    }
+
+    tasks.withType(ProcessResources).configureEach {
+        filteringCharset = 'UTF-8'
+    }
+
+    jmix {
+        bomVersion = '2.8.1'
+    }
+
+    repositories {
+        mavenCentral()
+        maven {
+            url 'https://global.repo.jmix.io/repository/public'
+        }
+    }
+
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+            }
+        }
+    }
+}

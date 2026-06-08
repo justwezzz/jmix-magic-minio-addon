@@ -1,0 +1,19 @@
+plugins {
+    id 'io.jmix'
+}
+
+archivesBaseName = 'jmix-magic-addons-minio'
+
+dependencies {
+    api 'io.jmix.core:jmix-core-starter'
+    api 'io.jmix.flowui:jmix-flowui-starter'
+    api 'io.jmix.flowui:jmix-flowui-themes'
+    api 'io.jmix.security:jmix-security-starter'
+    api 'io.jmix.security:jmix-security-flowui-starter'
+    api 'io.minio:minio:8.5.10'
+
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+}

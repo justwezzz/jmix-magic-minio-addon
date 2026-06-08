@@ -1,0 +1,770 @@
+package org.magic.addons.minio.service;
+
+import org.magic.addons.minio.dto.*;
+import io.minio.*;
+import io.minio.messages.DeleteObject;
+import io.minio.messages.Item;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.*;
+import java.util.Base64;
+import java.util.Iterator;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Service
+public class MinioService {
+
+    private static final String PLACEHOLDER_FILE = ".minio_placeholder";
+
+    @Autowired
+    private MinioClient minioClient;
+
+    /**
+     * 获取 MinioClient 实例，用于高级操作
+     */
+    public MinioClient getMinioClient() {
+        return minioClient;
+    }
+
+    // ==================== 辅助方法 ====================
+
+    public boolean isPlaceholder(String objectName) {
+        return objectName != null && objectName.endsWith("/" + PLACEHOLDER_FILE);
+    }
+
+    public String extractParentPath(String objectName) {
+        if (objectName == null || objectName.isEmpty()) {
+            return "";
+        }
+
+        // 去掉末尾的 '/'（文件夹路径以 '/' 结尾）
+        if (objectName.endsWith("/")) {
+            objectName = objectName.substring(0, objectName.length() - 1);
+        }
+
+        int lastSlash = objectName.lastIndexOf('/');
+        if (lastSlash <= 0) {
+            return "";
+        }
+        return objectName.substring(0, lastSlash + 1);
+    }
+
+    public String extractFileName(String objectName) {
+        if (objectName == null) {
+            return "";
+        }
+        int lastSlash = objectName.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            return objectName.substring(lastSlash + 1);
+        }
+        return objectName;
+    }
+
+    public String formatSize(Long bytes) {
+        if (bytes == null || bytes < 0) {
+            return "-";
+        }
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        if (bytes < 1024 * 1024) {
+            return String.format("%.1f KB", bytes / 1024.0);
+        }
+        if (bytes < 1024L * 1024 * 1024) {
+            return String.format("%.1f MB", bytes / (1024.0 * 1024));
+        }
+        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    // ==================== Bucket 操作 ====================
+
+    public List<MinioBucketDto> listBuckets() {
+        try {
+            List<io.minio.messages.Bucket> buckets = minioClient.listBuckets();
+            return buckets.stream()
+                    .map(b -> new MinioBucketDto(b.name(),
+                            b.creationDate() != null ?
+                                    b.creationDate().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() : null))
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            log.error("获取 Bucket 列表失败", e);
+            throw new RuntimeException("无法连接到 MinIO 服务", e);
+        }
+    }
+
+    public void createBucket(String name) {
+        try {
+            boolean exists = minioClient.bucketExists(
+                    BucketExistsArgs.builder().bucket(name).build()
+            );
+            if (exists) {
+                throw new IllegalArgumentException("Bucket 名称已存在: " + name);
+            }
+            minioClient.makeBucket(MakeBucketArgs.builder().bucket(name).build());
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("创建 Bucket 失败: {}", name, e);
+            throw new RuntimeException("创建 Bucket 失败: " + e.getMessage(), e);
+        }
+    }
+
+    public void deleteBucket(String name) {
+        try {
+            Iterable<io.minio.Result<Item>> items = minioClient.listObjects(
+                    ListObjectsArgs.builder().bucket(name).recursive(true).build()
+            );
+            if (items.iterator().hasNext()) {
+                throw new IllegalStateException("Bucket 不为空，无法删除");
+            }
+            minioClient.removeBucket(RemoveBucketArgs.builder().bucket(name).build());
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("删除 Bucket 失败: {}", name, e);
+            throw new RuntimeException("删除 Bucket 失败: " + e.getMessage(), e);
+        }
+    }
+
+    public boolean bucketExists(String name) {
+        try {
+            return minioClient.bucketExists(
+                    BucketExistsArgs.builder().bucket(name).build()
+            );
+        } catch (Exception e) {
+            log.error("检查 Bucket 存在失败: {}", name, e);
+            return false;
+        }
+    }
+
+    // ==================== 文件/文件夹操作 ====================
+
+    /**
+     * 列出指定前缀下的所有对象（递归）
+     * 用于构建完整的树形结构
+     */
+    public List<MinioTreeNode> listAllObjects(String bucket) {
+        try {
+            Iterable<io.minio.Result<Item>> results = minioClient.listObjects(
+                    ListObjectsArgs.builder()
+                            .bucket(bucket)
+                            .recursive(true)
+                            .build()
+            );
+
+            List<MinioTreeNode> nodes = new ArrayList<>();
+
+            for (io.minio.Result<Item> result : results) {
+                Item item = result.get();
+                String objectName = item.objectName();
+
+                if (isPlaceholder(objectName)) {
+                    continue;
+                }
+
+                boolean isDir = item.isDir();
+
+                // 安全获取 lastModified
+                LocalDateTime lastModified = null;
+                try {
+                    if (item.lastModified() != null) {
+                        lastModified = item.lastModified().toInstant()
+                                .atZone(ZoneId.systemDefault()).toLocalDateTime();
+                    }
+                } catch (Exception e) {
+                    // 忽略 lastModified 解析错误，保持为 null
+                }
+
+                MinioTreeNode node = MinioTreeNode.builder()
+                        .id(bucket + "/" + objectName)
+                        .type(isDir ? NodeType.FOLDER : NodeType.FILE)
+                        .name(isDir ? extractFileName(objectName.substring(0, objectName.length() - 1)) : extractFileName(objectName))
+                        .path(objectName)
+                        .bucket(bucket)
+                        .size(isDir ? null : item.size())
+                        .lastModified(lastModified)
+                        .build();
+
+                nodes.add(node);
+            }
+
+            return nodes;
+        } catch (Exception e) {
+            log.error("列出所有对象失败: bucket={}", bucket, e);
+            throw new RuntimeException("获取文件列表失败: " + e.getMessage(), e);
+        }
+    }
+
+    public List<MinioTreeNode> listObjects(String bucket, String prefix) {
+        try {
+            if (prefix == null) {
+                prefix = "";
+            }
+
+            Iterable<io.minio.Result<Item>> results = minioClient.listObjects(
+                    ListObjectsArgs.builder()
+                            .bucket(bucket)
+                            .prefix(prefix)
+                            .recursive(false)
+                            .build()
+            );
+
+            List<MinioTreeNode> nodes = new ArrayList<>();
+
+            for (io.minio.Result<Item> result : results) {
+                Item item = result.get();
+                String objectName = item.objectName();
+
+                if (isPlaceholder(objectName)) {
+                    continue;
+                }
+
+                boolean isDir = item.isDir();
+
+                // 安全获取 lastModified
+                LocalDateTime lastModified = null;
+                try {
+                    if (item.lastModified() != null) {
+                        lastModified = item.lastModified().toInstant()
+                                .atZone(ZoneId.systemDefault()).toLocalDateTime();
+                    }
+                } catch (Exception e) {
+                    // 忽略 lastModified 解析错误，保持为 null
+                }
+
+                MinioTreeNode node = MinioTreeNode.builder()
+                        .id(bucket + "/" + objectName)
+                        .type(isDir ? NodeType.FOLDER : NodeType.FILE)
+                        .name(isDir ? extractFileName(objectName.substring(0, objectName.length() - 1)) : extractFileName(objectName))
+                        .path(objectName)
+                        .bucket(bucket)
+                        .size(isDir ? null : item.size())
+                        .lastModified(lastModified)
+                        .build();
+
+                nodes.add(node);
+            }
+
+            nodes.sort((a, b) -> {
+                if (a.getType() != b.getType()) {
+                    return a.getType() == NodeType.FOLDER ? -1 : 1;
+                }
+                return a.getName().compareToIgnoreCase(b.getName());
+            });
+
+            return nodes;
+        } catch (Exception e) {
+            log.error("列出对象失败: bucket={}, prefix={}", bucket, prefix, e);
+            throw new RuntimeException("获取文件列表失败: " + e.getMessage(), e);
+        }
+    }
+
+    public void createFolder(String bucket, String folderPath) {
+        try {
+            if (!folderPath.endsWith("/")) {
+                folderPath += "/";
+            }
+
+            String placeholderPath = folderPath + PLACEHOLDER_FILE;
+
+            minioClient.putObject(
+                    PutObjectArgs.builder()
+                            .bucket(bucket)
+                            .object(placeholderPath)
+                            .stream(new ByteArrayInputStream(new byte[0]), 0, -1)
+                            .build()
+            );
+
+            log.info("创建文件夹: bucket={}, path={}", bucket, folderPath);
+        } catch (Exception e) {
+            log.error("创建文件夹失败: bucket={}, path={}", bucket, folderPath, e);
+            throw new RuntimeException("创建文件夹失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 检查文件夹是否存在
+     *
+     * @param bucket     Bucket 名称
+     * @param folderPath 文件夹路径（以 / 结尾）
+     * @return true 如果文件夹存在
+     */
+    public boolean folderExists(String bucket, String folderPath) {
+        try {
+            if (!folderPath.endsWith("/")) {
+                folderPath += "/";
+            }
+
+            // 检查文件夹的占位文件是否存在
+            String placeholderPath = folderPath + PLACEHOLDER_FILE;
+
+            minioClient.statObject(
+                    StatObjectArgs.builder()
+                            .bucket(bucket)
+                            .object(placeholderPath)
+                            .build()
+            );
+            return true;
+        } catch (Exception e) {
+            // 对象不存在或其他错误
+            return false;
+        }
+    }
+
+    /**
+     * 确保文件夹存在，不存在则创建
+     *
+     * @param bucket     Bucket 名称
+     * @param folderPath 文件夹路径
+     * @return true 如果创建了新文件夹，false 如果文件夹已存在
+     */
+    public boolean ensureFolderExists(String bucket, String folderPath) {
+        if (folderPath == null || folderPath.isEmpty()) {
+            return false;
+        }
+
+        if (!folderPath.endsWith("/")) {
+            folderPath += "/";
+        }
+
+        if (!folderExists(bucket, folderPath)) {
+            createFolder(bucket, folderPath);
+            return true;
+        }
+        return false;
+    }
+
+    public void deleteFolder(String bucket, String folderPath) {
+        try {
+            if (!folderPath.endsWith("/")) {
+                folderPath += "/";
+            }
+
+            Iterable<io.minio.Result<Item>> results = minioClient.listObjects(
+                    ListObjectsArgs.builder()
+                            .bucket(bucket)
+                            .prefix(folderPath)
+                            .recursive(true)
+                            .build()
+            );
+
+            List<DeleteObject> objectsToDelete = new ArrayList<>();
+            for (io.minio.Result<Item> result : results) {
+                Item item = result.get();
+                objectsToDelete.add(new DeleteObject(item.objectName()));
+            }
+
+            if (!objectsToDelete.isEmpty()) {
+                minioClient.removeObjects(
+                        RemoveObjectsArgs.builder()
+                                .bucket(bucket)
+                                .objects(objectsToDelete)
+                                .build()
+                );
+            }
+
+            log.info("删除文件夹: bucket={}, path={}, 删除对象数={}", bucket, folderPath, objectsToDelete.size());
+        } catch (Exception e) {
+            log.error("删除文件夹失败: bucket={}, path={}", bucket, folderPath, e);
+            throw new RuntimeException("删除文件夹失败: " + e.getMessage(), e);
+        }
+    }
+
+    public void uploadFile(String bucket, String objectName, InputStream stream, long size) {
+        try {
+            if (isPlaceholder(objectName)) {
+                throw new IllegalArgumentException("不允许上传系统保留文件名: " + PLACEHOLDER_FILE);
+            }
+
+            minioClient.putObject(
+                    PutObjectArgs.builder()
+                            .bucket(bucket)
+                            .object(objectName)
+                            .stream(stream, size, -1)
+                            .build()
+            );
+
+            log.info("上传文件: bucket={}, object={}", bucket, objectName);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("上传文件失败: bucket={}, object={}", bucket, objectName, e);
+            throw new RuntimeException("上传文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    public InputStream downloadFile(String bucket, String objectName) {
+        try {
+            return minioClient.getObject(
+                    GetObjectArgs.builder()
+                            .bucket(bucket)
+                            .object(objectName)
+                            .build()
+            );
+        } catch (Exception e) {
+            log.error("下载文件失败: bucket={}, object={}", bucket, objectName, e);
+            throw new RuntimeException("下载文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    public void deleteFile(String bucket, String objectName) {
+        try {
+            minioClient.removeObject(
+                    RemoveObjectArgs.builder()
+                            .bucket(bucket)
+                            .object(objectName)
+                            .build()
+            );
+
+            log.info("删除文件: bucket={}, object={}", bucket, objectName);
+        } catch (Exception e) {
+            log.error("删除文件失败: bucket={}, object={}", bucket, objectName, e);
+            throw new RuntimeException("删除文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    public MinioTreeNode getFileInfo(String bucket, String objectName) {
+        try {
+            StatObjectResponse stat = minioClient.statObject(
+                    StatObjectArgs.builder()
+                            .bucket(bucket)
+                            .object(objectName)
+                            .build()
+            );
+
+            return MinioTreeNode.builder()
+                    .id(bucket + "/" + objectName)
+                    .type(NodeType.FILE)
+                    .name(extractFileName(objectName))
+                    .path(objectName)
+                    .bucket(bucket)
+                    .size(stat.size())
+                    .lastModified(stat.lastModified() != null ?
+                            stat.lastModified().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() : null)
+                    .build();
+        } catch (Exception e) {
+            log.error("获取文件信息失败: bucket={}, object={}", bucket, objectName, e);
+            return null;
+        }
+    }
+
+    public BatchDeleteResult batchDelete(String bucket, List<MinioTreeNode> items) {
+        BatchDeleteResult result = BatchDeleteResult.builder()
+                .deletedFiles(0)
+                .deletedFolders(0)
+                .failedItems(new ArrayList<>())
+                .errors(new ArrayList<>())
+                .build();
+
+        List<DeleteObject> allObjectsToDelete = new ArrayList<>();
+
+        for (MinioTreeNode item : items) {
+            try {
+                if (item.getType() == NodeType.FILE) {
+                    allObjectsToDelete.add(new DeleteObject(item.getPath()));
+                    result.setDeletedFiles(result.getDeletedFiles() + 1);
+
+                } else if (item.getType() == NodeType.FOLDER) {
+                    String folderPath = item.getPath();
+                    if (!folderPath.endsWith("/")) {
+                        folderPath += "/";
+                    }
+
+                    Iterable<io.minio.Result<Item>> folderItems = minioClient.listObjects(
+                            ListObjectsArgs.builder()
+                                    .bucket(bucket)
+                                    .prefix(folderPath)
+                                    .recursive(true)
+                                    .build()
+                    );
+
+                    int folderFileCount = 0;
+                    for (io.minio.Result<Item> r : folderItems) {
+                        Item i = r.get();
+                        allObjectsToDelete.add(new DeleteObject(i.objectName()));
+                        if (!isPlaceholder(i.objectName())) {
+                            folderFileCount++;
+                        }
+                    }
+                    result.setDeletedFiles(result.getDeletedFiles() + folderFileCount);
+                    result.setDeletedFolders(result.getDeletedFolders() + 1);
+                }
+
+            } catch (Exception e) {
+                result.getFailedItems().add(item.getName());
+                result.getErrors().add(item.getName() + ": " + e.getMessage());
+            }
+        }
+
+        if (!allObjectsToDelete.isEmpty()) {
+            try {
+                // removeObjects 返回 Iterable，必须遍历才会实际执行删除
+                Iterable<io.minio.Result<io.minio.messages.DeleteError>> deleteResults =
+                    minioClient.removeObjects(
+                        RemoveObjectsArgs.builder()
+                                .bucket(bucket)
+                                .objects(allObjectsToDelete)
+                                .build()
+                    );
+
+                // 遍历结果以触发实际删除，并检查错误
+                for (io.minio.Result<io.minio.messages.DeleteError> r : deleteResults) {
+                    try {
+                        io.minio.messages.DeleteError error = r.get();
+                        if (error != null) {
+                            log.warn("删除对象失败: object={}, message={}",
+                                error.objectName(), error.message());
+                            result.getErrors().add(error.objectName() + ": " + error.message());
+                        }
+                    } catch (Exception e) {
+                        log.error("处理删除结果失败", e);
+                    }
+                }
+            } catch (Exception e) {
+                log.error("批量删除失败", e);
+                result.getErrors().add("批量删除失败: " + e.getMessage());
+            }
+        }
+
+        return result;
+    }
+
+    public PagedSearchResult searchPaged(String bucket, String keyword, String cursor, int pageSize) {
+        try {
+            keyword = keyword.toLowerCase();
+
+            String startAfter = null;
+            if (cursor != null && !cursor.isEmpty()) {
+                try {
+                    String raw = new String(Base64.getDecoder().decode(cursor));
+                    startAfter = raw.split("\\|")[0];
+                } catch (Exception e) {
+                    // 游标无效，从头开始
+                }
+            }
+
+            ListObjectsArgs.Builder argsBuilder = ListObjectsArgs.builder()
+                    .bucket(bucket)
+                    .recursive(true)
+                    .maxKeys(1000);
+
+            if (startAfter != null) {
+                argsBuilder.startAfter(startAfter);
+            }
+
+            Iterable<io.minio.Result<Item>> items = minioClient.listObjects(argsBuilder.build());
+
+            List<MinioTreeNode> matchedItems = new ArrayList<>();
+            String lastProcessedKey = startAfter;
+            boolean hasMore = false;
+
+            Iterator<io.minio.Result<Item>> iterator = items.iterator();
+            while (iterator.hasNext()) {
+                try {
+                    Item item = iterator.next().get();
+                    String objectName = item.objectName();
+                    lastProcessedKey = objectName;
+
+                    if (isPlaceholder(objectName)) {
+                        continue;
+                    }
+
+                    String fileName = extractFileName(objectName);
+                    if (fileName.toLowerCase().contains(keyword)) {
+                        MinioTreeNode node = MinioTreeNode.builder()
+                                .id(bucket + "/" + objectName)
+                                .type(NodeType.FILE)
+                                .name(fileName)
+                                .path(objectName)
+                                .bucket(bucket)
+                                .size(item.size())
+                                .lastModified(item.lastModified() != null ?
+                                        item.lastModified().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() : null)
+                                .build();
+
+                        matchedItems.add(node);
+
+                        if (matchedItems.size() >= pageSize) {
+                            hasMore = iterator.hasNext();
+                            break;
+                        }
+                    }
+                } catch (Exception e) {
+                    // 忽略单个对象错误
+                }
+            }
+
+            if (!hasMore) {
+                hasMore = iterator.hasNext();
+            }
+
+            String nextCursor = null;
+            if (hasMore && lastProcessedKey != null) {
+                String raw = lastProcessedKey + "|" + matchedItems.size();
+                nextCursor = Base64.getEncoder().encodeToString(raw.getBytes());
+            }
+
+            return PagedSearchResult.builder()
+                    .items(matchedItems)
+                    .nextCursor(nextCursor)
+                    .hasMore(hasMore)
+                    .totalFetched(matchedItems.size())
+                    .build();
+
+        } catch (Exception e) {
+            log.error("搜索失败: bucket={}, keyword={}", bucket, keyword, e);
+            throw new RuntimeException("搜索失败: " + e.getMessage(), e);
+        }
+    }
+
+    // ==================== 文件夹上传 ====================
+
+    /**
+     * 上传文件夹（递归上传所有文件，为每个子文件夹创建占位文件）
+     *
+     * @param bucket 目标 Bucket
+     * @param targetPath 目标路径（MinIO 中的前缀）
+     * @param localFolder 本地文件夹路径
+     * @param progressConsumer 进度回调（可选）
+     * @return 上传结果
+     */
+    public UploadFolderResult uploadFolder(String bucket, String targetPath,
+            Path localFolder,
+            Consumer<Double> progressConsumer) {
+
+        UploadFolderResult result = UploadFolderResult.builder()
+                .uploadedFiles(0)
+                .createdFolders(0)
+                .totalBytes(0)
+                .failedFiles(new ArrayList<>())
+                .errors(new ArrayList<>())
+                .build();
+
+        try {
+            // 规范化目标路径
+            if (targetPath == null) {
+                targetPath = "";
+            } else if (!targetPath.isEmpty() && !targetPath.endsWith("/")) {
+                targetPath += "/";
+            }
+
+            // 获取本地文件夹名称
+            String folderName = localFolder.getFileName().toString();
+            String remoteBasePath = targetPath + folderName + "/";
+
+            // 创建根文件夹的占位文件
+            createFolder(bucket, remoteBasePath);
+            result.setCreatedFolders(1);
+
+            // 收集所有文件
+            List<Path> allFiles = new ArrayList<>();
+            Files.walk(localFolder)
+                .filter(path -> !Files.isDirectory(path))
+                .forEach(allFiles::add);
+
+            // 计算总大小
+            long[] totalSize = {0};
+            for (Path file : allFiles) {
+                try {
+                    totalSize[0] += Files.size(file);
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
+
+            // 记录已上传大小
+            long[] uploadedSize = {0};
+
+            // 跟踪已创建的文件夹
+            Set<String> createdFolders = new HashSet<>();
+
+            // 上传所有文件
+            for (Path file : allFiles) {
+                try {
+                    // 计算相对路径
+                    String relativePath = localFolder.relativize(file).toString()
+                        .replace(File.separatorChar, '/');
+                    String remotePath = remoteBasePath + relativePath;
+
+                    // 确保父文件夹存在（创建占位文件）
+                    String parentPath = extractParentPath(remotePath);
+                    if (parentPath != null && !parentPath.isEmpty() && !createdFolders.contains(parentPath)) {
+                        // 递归创建所有父文件夹
+                        ensureParentFoldersExist(bucket, parentPath, createdFolders);
+                    }
+
+                    // 上传文件
+                    long fileSize = Files.size(file);
+                    try (InputStream stream = Files.newInputStream(file)) {
+                        uploadFile(bucket, remotePath, stream, fileSize);
+                    }
+
+                    result.setUploadedFiles(result.getUploadedFiles() + 1);
+                    result.setTotalBytes(result.getTotalBytes() + fileSize);
+
+                    // 更新进度
+                    uploadedSize[0] += fileSize;
+                    if (progressConsumer != null && totalSize[0] > 0) {
+                        double progress = (double) uploadedSize[0] / totalSize[0];
+                        progressConsumer.accept(progress);
+                    }
+
+                } catch (Exception e) {
+                    result.getFailedFiles().add(file.toString());
+                    result.getErrors().add(file.getFileName() + ": " + e.getMessage());
+                }
+            }
+
+            // 更新创建的文件夹数量
+            result.setCreatedFolders(result.getCreatedFolders() + createdFolders.size());
+
+            log.info("上传文件夹完成: bucket={}, local={}, uploaded={} files, created={} folders",
+                bucket, localFolder, result.getUploadedFiles(), result.getCreatedFolders());
+
+        } catch (Exception e) {
+            log.error("上传文件夹失败: bucket={}, local={}", bucket, localFolder, e);
+            result.getErrors().add("上传失败: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    /**
+     * 确保父文件夹存在（递归创建占位文件）
+     */
+    private void ensureParentFoldersExist(String bucket, String folderPath, Set<String> createdFolders) {
+        if (folderPath == null || folderPath.isEmpty()) {
+            return;
+        }
+
+        // 分解路径并逐级创建
+        String[] parts = folderPath.split("/");
+        StringBuilder currentPath = new StringBuilder();
+
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            currentPath.append(part).append("/");
+            String path = currentPath.toString();
+
+            if (!createdFolders.contains(path)) {
+                try {
+                    createFolder(bucket, path);
+                    createdFolders.add(path);
+                } catch (Exception e) {
+                    // 文件夹可能已存在，忽略
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,1788 @@
+package org.magic.addons.minio.view;
+
+import io.jmix.flowui.view.DefaultMainViewParent;
+import io.jmix.flowui.view.StandardView;
+import io.jmix.flowui.view.ViewController;
+import io.jmix.flowui.view.ViewDescriptor;
+import io.jmix.flowui.view.ViewComponent;
+import io.jmix.flowui.view.Subscribe;
+import org.magic.addons.minio.component.PathSelector;
+import org.magic.addons.minio.dto.BatchDeleteResult;
+import org.magic.addons.minio.dto.MinioBucketDto;
+import org.magic.addons.minio.dto.MinioTreeNode;
+import org.magic.addons.minio.dto.NodeType;
+import org.magic.addons.minio.dto.PagedSearchResult;
+import org.magic.addons.minio.service.MinioService;
+import com.vaadin.flow.component.UI;
+import com.vaadin.flow.component.button.Button;
+import com.vaadin.flow.component.button.ButtonVariant;
+import com.vaadin.flow.component.dialog.Dialog;
+import com.vaadin.flow.component.grid.Grid;
+import com.vaadin.flow.component.grid.GridMultiSelectionModel;
+import com.vaadin.flow.component.html.Anchor;
+import com.vaadin.flow.component.html.Span;
+import com.vaadin.flow.component.icon.Icon;
+import com.vaadin.flow.component.icon.VaadinIcon;
+import com.vaadin.flow.component.notification.Notification;
+import com.vaadin.flow.component.notification.NotificationVariant;
+import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
+import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.textfield.TextField;
+import com.vaadin.flow.component.upload.Upload;
+import com.vaadin.flow.router.Route;
+import com.vaadin.flow.server.streams.UploadHandler;
+import com.vaadin.flow.data.provider.hierarchy.TreeData;
+import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
+import com.vaadin.flow.data.renderer.ComponentRenderer;
+import com.vaadin.flow.server.streams.DownloadHandler;
+import com.vaadin.flow.server.streams.DownloadResponse;
+import io.jmix.flowui.component.grid.DataGrid;
+import io.jmix.flowui.component.grid.TreeDataGrid;
+import io.jmix.flowui.data.grid.ContainerDataGridItems;
+import io.jmix.flowui.kit.action.ActionPerformedEvent;
+import io.jmix.flowui.model.CollectionContainer;
+import io.jmix.flowui.model.DataComponents;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+
+import jakarta.annotation.PostConstruct;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
+@Route(value = "minio", layout = DefaultMainViewParent.class)
+@ViewController(id = "minio_BrowserView")
+@ViewDescriptor(path = "minio/minio-browser-view.xml")
+@Slf4j
+public class MinioBrowserView extends StandardView {
+
+    @PostConstruct
+    public void initBean() {
+        log.info("=== MinioBrowserView bean created ===");
+    }
+
+    @Autowired
+    private MinioService minioService;
+
+    @Autowired
+    private DataComponents dataComponents;
+
+    @ViewComponent
+    private DataGrid<MinioBucketDto> bucketDataGrid;
+
+    private CollectionContainer<MinioBucketDto> bucketDc;
+
+    @ViewComponent
+    private TreeDataGrid<MinioTreeNode> fileTreeGrid;
+
+    @ViewComponent
+    private Span statsLabel;
+
+    @ViewComponent
+    private TextField searchField;
+
+    @ViewComponent
+    private Button createBucketBtn;
+
+    @ViewComponent
+    private Button refreshBucketBtn;
+
+    @ViewComponent
+    private Button createFolderBtn;
+
+    @ViewComponent
+    private Button deleteFileBtn;
+
+    @ViewComponent
+    private Button selectAllFilesBtn;
+
+    @ViewComponent
+    private Button refreshFileBtn;
+
+    @Value("${jmix.minio.download.max-files:1000}")
+    private int downloadMaxFiles;
+
+    // Shift 选择锚点
+    private MinioTreeNode selectionAnchor = null;
+
+    @ViewComponent
+    private Button downloadFileBtn;
+
+    private MinioBucketDto selectedBucket;
+    private TreeData<MinioTreeNode> treeData;
+    private TreeDataProvider<MinioTreeNode> treeDataProvider;
+    private Map<String, MinioTreeNode> pathToNodeMap;  // 用于快速查找节点
+
+    // 搜索相关字段
+    private Dialog searchDialog;
+    private Grid<MinioTreeNode> searchResultGrid;
+    private String searchCursor;
+    private String currentSearchKeyword;
+    private List<MinioTreeNode> searchResults;
+    private Button loadMoreButton;
+
+    @Subscribe
+    public void onInit(final InitEvent event) {
+        // 创建集合容器用于绑定 DataGrid
+        bucketDc = dataComponents.createCollectionContainer(MinioBucketDto.class);
+        bucketDataGrid.setItems(new ContainerDataGridItems<>(bucketDc));
+
+        initBucketGrid();
+        initFileTreeGrid();
+        initSearchField();
+        loadBuckets();
+    }
+
+    @Subscribe("renameBucketAction")
+    public void onRenameBucketAction(final ActionPerformedEvent event) {
+        onRenameBucketClick();
+    }
+
+    @Subscribe("deleteBucketAction")
+    public void onDeleteBucketAction(final ActionPerformedEvent event) {
+        onDeleteBucketClick();
+    }
+
+    @Subscribe("uploadFileAction")
+    public void onUploadFileAction(final ActionPerformedEvent event) {
+        if (selectedBucket == null) {
+            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+        showUploadFileDialog();
+    }
+
+    @Subscribe("uploadFolderAction")
+    public void onUploadFolderAction(final ActionPerformedEvent event) {
+        if (selectedBucket == null) {
+            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+        showUploadFolderDialog();
+    }
+
+    private void initBucketGrid() {
+        // 清除所有自动生成的列
+        bucketDataGrid.removeAllColumns();
+
+        // Bucket 名称列带图标
+        bucketDataGrid.addColumn(new ComponentRenderer<>(bucket -> {
+            HorizontalLayout layout = new HorizontalLayout();
+            layout.setAlignItems(com.vaadin.flow.component.orderedlayout.FlexComponent.Alignment.CENTER);
+            layout.setSpacing(true);
+
+            Icon icon = VaadinIcon.DATABASE.create();
+            icon.setColor("#4CAF50");
+
+            Span name = new Span(bucket.getName());
+            layout.add(icon, name);
+
+            return layout;
+        })).setHeader("名称").setKey("nameWithIcon").setAutoWidth(true);
+
+        // 格式化创建时间列
+        bucketDataGrid.addColumn(new ComponentRenderer<>(bucket -> {
+            LocalDateTime date = bucket.getCreationDate();
+            if (date == null) {
+                return new Span("-");
+            }
+            String formatted = date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+            return new Span(formatted);
+        })).setHeader("创建时间").setKey("creationDateFormatted").setAutoWidth(true);
+
+        // 选择事件
+        bucketDataGrid.addSelectionListener(e -> {
+            e.getFirstSelectedItem().ifPresent(this::onBucketSelected);
+        });
+    }
+
+    private void loadBuckets() {
+        try {
+            List<MinioBucketDto> buckets = minioService.listBuckets();
+            bucketDc.setItems(buckets);
+            bucketDataGrid.setItems(new ContainerDataGridItems<>(bucketDc));
+        } catch (Exception e) {
+            // 显示错误提示
+            statsLabel.setText("无法连接到 MinIO 服务");
+        }
+    }
+
+    private void onBucketSelected(MinioBucketDto bucket) {
+        this.selectedBucket = bucket;
+
+        // 初始化文件树数据
+        loadFileTreeData();
+
+        // 更新统计信息
+        updateStats();
+    }
+
+    /**
+     * 加载文件树数据到 TreeData（懒加载模式）
+     */
+    private void loadFileTreeData() {
+        if (selectedBucket == null) return;
+
+        // 创建新的 TreeData
+        treeData = new TreeData<>();
+        pathToNodeMap = new HashMap<>();
+
+        // 只加载根目录下的对象
+        List<MinioTreeNode> rootItems = minioService.listObjects(selectedBucket.getName(), null);
+
+        // 添加根节点
+        for (MinioTreeNode node : rootItems) {
+            pathToNodeMap.put(node.getPath(), node);
+            treeData.addItem(null, node);
+
+            // 如果是文件夹，添加一个虚拟子节点（占位符），这样会显示展开箭头
+            if (node.getType() == NodeType.FOLDER) {
+                addPlaceholderChild(node);
+            }
+        }
+
+        // 设置 DataProvider
+        treeDataProvider = new TreeDataProvider<>(treeData);
+        fileTreeGrid.setDataProvider(treeDataProvider);
+
+        // 添加展开监听器，实现懒加载
+        fileTreeGrid.addExpandListener(event -> {
+            for (MinioTreeNode node : event.getItems()) {
+                onFolderExpand(node);
+            }
+        });
+    }
+
+    /**
+     * 添加占位符子节点（用于显示展开箭头）
+     */
+    private void addPlaceholderChild(MinioTreeNode parent) {
+        MinioTreeNode placeholder = MinioTreeNode.builder()
+                .id(parent.getPath() + ".placeholder")
+                .type(NodeType.FILE)
+                .name("加载中...")
+                .path(parent.getPath() + ".placeholder")
+                .bucket(parent.getBucket())
+                .build();
+        treeData.addItem(parent, placeholder);
+    }
+
+    /**
+     * 文件夹展开时的懒加载
+     */
+    private void onFolderExpand(MinioTreeNode folder) {
+        if (folder.getType() != NodeType.FOLDER) return;
+
+        // 检查是否已经加载过（没有占位符节点）
+        List<MinioTreeNode> children = treeData.getChildren(folder);
+        if (children.isEmpty()) return;
+
+        // 检查第一个子节点是否是占位符
+        MinioTreeNode firstChild = children.get(0);
+        if (!firstChild.getPath().endsWith(".placeholder")) {
+            // 已经加载过真实数据，不需要再加载
+            return;
+        }
+
+        // 移除占位符节点
+        treeData.removeItem(firstChild);
+
+        // 加载真实的子节点
+        List<MinioTreeNode> subItems = minioService.listObjects(folder.getBucket(), folder.getPath());
+
+        for (MinioTreeNode node : subItems) {
+            pathToNodeMap.put(node.getPath(), node);
+            treeData.addItem(folder, node);
+
+            // 如果子节点也是文件夹，添加占位符
+            if (node.getType() == NodeType.FOLDER) {
+                addPlaceholderChild(node);
+            }
+        }
+
+        // 刷新数据
+        treeDataProvider.refreshAll();
+    }
+
+    private void updateStats() {
+        if (selectedBucket == null) {
+            statsLabel.setText("请选择一个 Bucket");
+            return;
+        }
+        // 简单统计：基于当前已加载的数据
+        statsLabel.setText("Bucket: " + selectedBucket.getName());
+    }
+
+    // ==================== Bucket 操作方法 ====================
+
+    @Subscribe(id = "createBucketBtn", subject = "clickListener")
+    public void onCreateBucketBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        showCreateBucketDialog();
+    }
+
+    @Subscribe(id = "refreshBucketBtn", subject = "clickListener")
+    public void onRefreshBucketBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        loadBuckets();
+        clearFileTree();
+        showNotification("Bucket 列表已刷新", NotificationVariant.LUMO_SUCCESS);
+    }
+
+    private void showCreateBucketDialog() {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("创建 Bucket");
+        dialog.setWidth("400px");
+
+        TextField nameField = new TextField("Bucket 名称");
+        nameField.setWidthFull();
+        nameField.setRequired(true);
+        nameField.setHelperText("3-63 个字符，仅限小写字母、数字和短横线");
+
+        Button createButton = new Button("创建", e -> {
+            String name = nameField.getValue().trim();
+            if (validateBucketName(name)) {
+                try {
+                    minioService.createBucket(name);
+                    dialog.close();
+                    loadBuckets();
+                    showNotification("Bucket 创建成功", NotificationVariant.LUMO_SUCCESS);
+                } catch (Exception ex) {
+                    showNotification("创建失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                }
+            }
+        });
+        createButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        Button cancelButton = new Button("取消", e -> dialog.close());
+
+        dialog.add(nameField);
+        dialog.getFooter().add(cancelButton, createButton);
+        dialog.open();
+        nameField.focus();
+    }
+
+    private void onDeleteBucketClick() {
+        MinioBucketDto selected = bucketDataGrid.getSingleSelectedItem();
+        if (selected == null) {
+            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("删除 Bucket");
+        dialog.setWidth("400px");
+
+        Span message = new Span("确定要删除 Bucket '" + selected.getName() + "' 吗？此操作不可撤销。");
+        message.getElement().getThemeList().add("warning");
+
+        Button deleteButton = new Button("删除", e -> {
+            try {
+                minioService.deleteBucket(selected.getName());
+                dialog.close();
+                loadBuckets();
+                clearFileTree();
+                showNotification("Bucket 删除成功", NotificationVariant.LUMO_SUCCESS);
+            } catch (IllegalStateException ex) {
+                showNotification("删除失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+            } catch (Exception ex) {
+                showNotification("删除失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+            }
+        });
+        deleteButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_ERROR);
+
+        Button cancelButton = new Button("取消", e -> dialog.close());
+
+        dialog.add(message);
+        dialog.getFooter().add(cancelButton, deleteButton);
+        dialog.open();
+    }
+
+    private void onRenameBucketClick() {
+        MinioBucketDto selected = bucketDataGrid.getSingleSelectedItem();
+        if (selected == null) {
+            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("重命名 Bucket");
+        dialog.setWidth("400px");
+
+        TextField nameField = new TextField("新名称");
+        nameField.setWidthFull();
+        nameField.setValue(selected.getName());
+        nameField.setRequired(true);
+        nameField.setHelperText("3-63 个字符，仅限小写字母、数字和短横线");
+
+        Button renameButton = new Button("重命名", e -> {
+            String newName = nameField.getValue().trim();
+            if (newName.equals(selected.getName())) {
+                showNotification("新名称与原名称相同", NotificationVariant.LUMO_WARNING);
+                return;
+            }
+            if (validateBucketName(newName)) {
+                try {
+                    renameBucket(selected.getName(), newName);
+                    dialog.close();
+                    loadBuckets();
+                    clearFileTree();
+                    showNotification("Bucket 重命名成功", NotificationVariant.LUMO_SUCCESS);
+                } catch (Exception ex) {
+                    showNotification("重命名失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                }
+            }
+        });
+        renameButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        Button cancelButton = new Button("取消", e -> dialog.close());
+
+        dialog.add(nameField);
+        dialog.getFooter().add(cancelButton, renameButton);
+        dialog.open();
+        nameField.focus();
+    }
+
+    private void renameBucket(String oldName, String newName) {
+        // 重命名 Bucket：MinIO 不支持直接重命名，需要复制所有对象到新 Bucket 并删除原 Bucket
+        try {
+            // 1. 创建新 Bucket
+            minioService.createBucket(newName);
+
+            // 2. 复制所有对象
+            Iterable<io.minio.Result<io.minio.messages.Item>> objects =
+                minioService.getMinioClient().listObjects(
+                    io.minio.ListObjectsArgs.builder()
+                        .bucket(oldName)
+                        .recursive(true)
+                        .build()
+                );
+
+            for (io.minio.Result<io.minio.messages.Item> result : objects) {
+                io.minio.messages.Item item = result.get();
+                String objectName = item.objectName();
+
+                minioService.getMinioClient().copyObject(
+                    io.minio.CopyObjectArgs.builder()
+                        .bucket(newName)
+                        .object(objectName)
+                        .source(io.minio.CopySource.builder()
+                            .bucket(oldName)
+                            .object(objectName)
+                            .build())
+                        .build()
+                );
+            }
+
+            // 3. 删除原 Bucket（必须先清空）
+            for (io.minio.Result<io.minio.messages.Item> result : objects) {
+                io.minio.messages.Item item = result.get();
+                minioService.getMinioClient().removeObject(
+                    io.minio.RemoveObjectArgs.builder()
+                        .bucket(oldName)
+                        .object(item.objectName())
+                        .build()
+                );
+            }
+
+            // 4. 删除空 Bucket
+            minioService.deleteBucket(oldName);
+
+        } catch (Exception e) {
+            throw new RuntimeException("重命名过程中出错: " + e.getMessage(), e);
+        }
+    }
+
+    private boolean validateBucketName(String name) {
+        if (name == null || name.isEmpty()) {
+            showNotification("Bucket 名称不能为空", NotificationVariant.LUMO_ERROR);
+            return false;
+        }
+        if (name.length() < 3 || name.length() > 63) {
+            showNotification("Bucket 名称长度必须为 3-63 个字符", NotificationVariant.LUMO_ERROR);
+            return false;
+        }
+        // MinIO/MinIO Bucket 命名规则：
+        // - 只能包含小写字母、数字和短横线
+        // - 必须以字母或数字开头和结尾
+        if (!name.matches("^[a-z0-9][a-z0-9-]*[a-z0-9]$") && name.length() > 1) {
+            showNotification("Bucket 名称只能包含小写字母、数字和短横线，且必须以字母或数字开头和结尾", NotificationVariant.LUMO_ERROR);
+            return false;
+        }
+        // 单字符情况
+        if (name.length() == 1 && !name.matches("^[a-z0-9]$")) {
+            showNotification("Bucket 名称只能包含小写字母或数字", NotificationVariant.LUMO_ERROR);
+            return false;
+        }
+        // 两字符情况
+        if (name.length() == 2 && !name.matches("^[a-z0-9][a-z0-9]$")) {
+            showNotification("Bucket 名称只能包含小写字母或数字", NotificationVariant.LUMO_ERROR);
+            return false;
+        }
+        return true;
+    }
+
+    private void showNotification(String message, NotificationVariant variant) {
+        Notification notification = new Notification(message, 3000);
+        notification.addThemeVariants(variant);
+        notification.open();
+    }
+
+    private void clearFileTree() {
+        treeData = new TreeData<>();
+        pathToNodeMap = new HashMap<>();
+        treeDataProvider = new TreeDataProvider<>(treeData);
+        fileTreeGrid.setDataProvider(treeDataProvider);
+        selectedBucket = null;
+        statsLabel.setText("请选择一个 Bucket");
+    }
+
+    // ==================== 文件操作方法 ====================
+
+    @Subscribe(id = "createFolderBtn", subject = "clickListener")
+    public void onCreateFolderBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        if (selectedBucket == null) {
+            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+        showCreateFolderDialog();
+    }
+
+    @Subscribe(id = "deleteFileBtn", subject = "clickListener")
+    public void onDeleteFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
+        if (selected.isEmpty()) {
+            showNotification("请先选择要删除的文件或文件夹", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+        showDeleteConfirmDialog(selected);
+    }
+
+    @Subscribe(id = "selectAllFilesBtn", subject = "clickListener")
+    public void onSelectAllFilesBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        if (selectedBucket == null) {
+            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        // 从内存中获取所有节点
+        if (pathToNodeMap == null || pathToNodeMap.isEmpty()) {
+            showNotification("当前目录没有文件", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        List<MinioTreeNode> allItems = new ArrayList<>(pathToNodeMap.values());
+
+        // 检查当前是否已经全选
+        Set<MinioTreeNode> currentSelected = fileTreeGrid.getSelectedItems();
+        boolean isAllSelected = currentSelected.size() == allItems.size() && currentSelected.containsAll(allItems);
+
+        if (isAllSelected) {
+            // 已全选，则清空选择（全反选）
+            fileTreeGrid.deselectAll();
+            showNotification("已取消全选", NotificationVariant.LUMO_SUCCESS);
+        } else {
+            // 未全选，则全选
+            fileTreeGrid.asMultiSelect().setValue(allItems.stream().collect(Collectors.toSet()));
+            showNotification(String.format("已选择 %d 个项目", allItems.size()), NotificationVariant.LUMO_SUCCESS);
+        }
+    }
+
+    @Subscribe(id = "refreshFileBtn", subject = "clickListener")
+    public void onRefreshFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        if (selectedBucket != null) {
+            refreshFileTree();
+            showNotification("文件列表已刷新", NotificationVariant.LUMO_SUCCESS);
+        }
+    }
+
+    @Subscribe(id = "downloadFileBtn", subject = "clickListener")
+    public void onDownloadFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
+        if (selected.isEmpty()) {
+            showNotification("请先选择要下载的项目", NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        // 统计文件数量
+        int fileCount = countFilesInSelection(selected);
+        if (downloadMaxFiles > 0 && fileCount > downloadMaxFiles) {
+            showNotification(String.format("选中文件过多（%d 个），请分批下载（最多 %d 个）",
+                    fileCount, downloadMaxFiles), NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        // 判断下载方式
+        if (selected.size() == 1) {
+            MinioTreeNode item = selected.iterator().next();
+            if (item.getType() == NodeType.FILE) {
+                // 单个文件：直接下载
+                downloadSingleFile(item);
+            } else {
+                // 单个文件夹：打包 ZIP
+                downloadAsZip(selected);
+            }
+        } else {
+            // 多个项目：打包 ZIP
+            downloadAsZip(selected);
+        }
+    }
+
+    private void initFileTreeGrid() {
+        // 初始化时设置一个空的 DataProvider
+        treeData = new TreeData<>();
+        pathToNodeMap = new HashMap<>();
+        treeDataProvider = new TreeDataProvider<>(treeData);
+        fileTreeGrid.setDataProvider(treeDataProvider);
+
+        // 名称列（使用层级列保留树形结构）
+        fileTreeGrid.addHierarchyColumn(node -> {
+            // 使用 Unicode 符号作为图标前缀
+            String iconPrefix;
+            if (node.getType() == NodeType.FOLDER) {
+                iconPrefix = "📁 ";  // 文件夹图标
+            } else {
+                iconPrefix = getFileIconPrefix(node.getName());  // 根据扩展名选择图标
+            }
+            return iconPrefix + node.getName();
+        }).setHeader("名称").setKey("name").setAutoWidth(true);
+
+        fileTreeGrid.addColumn(node -> {
+            if (node.getSize() == null) return "-";
+            return minioService.formatSize(node.getSize());
+        }).setHeader("大小").setKey("size").setWidth("100px");
+
+        fileTreeGrid.addColumn(node -> {
+            if (node.getLastModified() == null) return "-";
+            return node.getLastModified().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        }).setHeader("修改时间").setKey("lastModified").setWidth("150px");
+
+        // Shift + 点击范围选择（使用 ClientItemToggleListener）
+        GridMultiSelectionModel<MinioTreeNode> selectionModel =
+                (GridMultiSelectionModel<MinioTreeNode>) fileTreeGrid.getSelectionModel();
+        selectionModel.addClientItemToggleListener(event -> {
+            MinioTreeNode item = event.getItem();
+
+            // 如果锚点未设置，设置为当前项
+            if (selectionAnchor == null) {
+                selectionAnchor = item;
+            }
+
+            if (event.isShiftKey()) {
+                // 计算锚点和当前项之间的范围
+                List<MinioTreeNode> range = getNodesBetween(selectionAnchor, item);
+                if (!range.isEmpty()) {
+                    // 根据当前项的选中状态更新范围选择
+                    if (event.isSelected()) {
+                        fileTreeGrid.asMultiSelect().setValue(new HashSet<>(range));
+                    } else {
+                        // 取消选择：从当前选择中移除范围内的项
+                        Set<MinioTreeNode> currentSelection = new HashSet<>(fileTreeGrid.getSelectedItems());
+                        currentSelection.removeAll(range);
+                        fileTreeGrid.asMultiSelect().setValue(currentSelection);
+                    }
+                }
+            }
+
+            // 更新锚点为当前项
+            selectionAnchor = item;
+        });
+    }
+
+    /**
+     * 根据文件扩展名获取对应的 Unicode 图标前缀
+     */
+    private String getFileIconPrefix(String fileName) {
+        String extension = getFileExtension(fileName).toLowerCase();
+
+        return switch (extension) {
+            // 图片文件
+            case "jpg", "jpeg", "png", "gif", "bmp", "svg", "webp", "ico" -> "🖼️ ";
+            // 文档文件
+            case "pdf" -> "📄 ";
+            case "doc", "docx" -> "📝 ";
+            case "xls", "xlsx", "csv" -> "📊 ";
+            case "ppt", "pptx" -> "📽️ ";
+            // 代码文件
+            case "java", "js", "ts", "py", "go", "rs", "c", "cpp", "h", "cs", "php", "rb", "swift", "kt", "scala" -> "💻 ";
+            // 标记语言和配置
+            case "html", "htm", "css", "scss", "sass", "less", "xml", "json", "yaml", "yml", "md", "markdown", "sql" -> "📜 ";
+            // 压缩文件
+            case "zip", "rar", "7z", "tar", "gz", "bz2" -> "📦 ";
+            // 音频文件
+            case "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a" -> "🎵 ";
+            // 视频文件
+            case "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm" -> "🎬 ";
+            // 可执行文件
+            case "exe", "msi", "dmg", "app", "deb", "rpm" -> "⚙️ ";
+            // 字体文件
+            case "ttf", "otf", "woff", "woff2", "eot" -> "🔤 ";
+            // 默认文件图标
+            default -> "📄 ";
+        };
+    }
+
+    /**
+     * 获取文件扩展名
+     */
+    private String getFileExtension(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return "";
+        }
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot > 0 && lastDot < fileName.length() - 1) {
+            return fileName.substring(lastDot + 1);
+        }
+        return "";
+    }
+
+    private void showCreateFolderDialog() {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("新建文件夹");
+        dialog.setWidth("500px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(false);
+        content.setSpacing(true);
+
+        // 路径选择器
+        PathSelector pathSelector = new PathSelector(minioService);
+        pathSelector.setBucket(selectedBucket.getName());
+        pathSelector.setSelectedPath(inferDefaultPath());
+
+        // 文件夹名称输入
+        TextField nameField = new TextField("文件夹名称");
+        nameField.setWidthFull();
+        nameField.setRequired(true);
+
+        content.add(pathSelector, nameField);
+
+        Button createButton = new Button("创建", e -> {
+            String name = nameField.getValue().trim();
+            if (name.isEmpty()) {
+                showNotification("请输入文件夹名称", NotificationVariant.LUMO_WARNING);
+                return;
+            }
+            try {
+                String targetPath = pathSelector.getSelectedPath();
+                String folderPath = targetPath + name + "/";
+                minioService.createFolder(selectedBucket.getName(), folderPath);
+                dialog.close();
+
+                // 增量添加文件夹节点
+                MinioTreeNode folderNode = MinioTreeNode.builder()
+                        .id(folderPath)
+                        .type(NodeType.FOLDER)
+                        .name(name)
+                        .path(folderPath)
+                        .bucket(selectedBucket.getName())
+                        .lastModified(LocalDateTime.now())
+                        .build();
+                addNodeToTree(folderNode);
+
+                showNotification("文件夹创建成功", NotificationVariant.LUMO_SUCCESS);
+            } catch (Exception ex) {
+                showNotification("创建失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+            }
+        });
+        createButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        Button cancelButton = new Button("取消", e -> dialog.close());
+
+        dialog.add(content);
+        dialog.getFooter().add(cancelButton, createButton);
+        dialog.open();
+        nameField.focus();
+    }
+
+    private void showUploadFileDialog() {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("上传文件");
+        dialog.setWidth("500px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setPadding(false);
+        content.setSpacing(true);
+
+        // 路径选择器
+        PathSelector pathSelector = new PathSelector(minioService);
+        pathSelector.setBucket(selectedBucket.getName());
+        pathSelector.setSelectedPath(inferDefaultPath());
+
+        // 使用 Vaadin Upload 组件
+        UploadHandler handler = UploadHandler.inMemory((metadata, data) -> {
+            String fileName = metadata.fileName();
+            long contentLength = metadata.contentLength();
+            try {
+                String targetPath = pathSelector.getSelectedPath();
+                String objectPath = targetPath + fileName;
+                minioService.uploadFile(
+                        selectedBucket.getName(),
+                        objectPath,
+                        new ByteArrayInputStream(data),
+                        contentLength
+                );
+                dialog.close();
+
+                // 增量添加节点到树
+                MinioTreeNode newNode = MinioTreeNode.builder()
+                        .id(objectPath)
+                        .type(NodeType.FILE)
+                        .name(fileName)
+                        .path(objectPath)
+                        .bucket(selectedBucket.getName())
+                        .size(contentLength)
+                        .lastModified(LocalDateTime.now())
+                        .build();
+                addNodeToTree(newNode);
+
+                showNotification("文件上传成功: " + fileName, NotificationVariant.LUMO_SUCCESS);
+            } catch (Exception ex) {
+                showNotification("上传失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+            }
+        });
+
+        Upload upload = new Upload(handler);
+        upload.setMaxFiles(1);
+        upload.setWidthFull();
+
+        upload.addFileRejectedListener(event -> {
+            showNotification("文件被拒绝: " + event.getErrorMessage(), NotificationVariant.LUMO_ERROR);
+        });
+
+        content.add(pathSelector, upload);
+
+        Button cancelButton = new Button("关闭", e -> dialog.close());
+
+        dialog.add(content);
+        dialog.getFooter().add(cancelButton);
+        dialog.open();
+    }
+
+    private void showUploadFolderDialog() {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("上传文件夹");
+        dialog.setWidth("600px");
+
+        VerticalLayout content = new VerticalLayout();
+        content.setSpacing(true);
+
+        // 路径选择器
+        PathSelector pathSelector = new PathSelector(minioService);
+        pathSelector.setBucket(selectedBucket.getName());
+        pathSelector.setSelectedPath(inferDefaultPath());
+
+        // 说明文字
+        Span infoText = new Span(
+            "点击下方按钮选择本地文件夹。\n" +
+            "文件夹名称将自动识别，目录结构将被完整保留。"
+        );
+        infoText.getElement().setProperty("whiteSpace", "pre-wrap");
+        content.add(pathSelector, infoText);
+
+        // 上传统计
+        AtomicInteger uploadedCount = new AtomicInteger(0);
+        AtomicInteger failedCount = new AtomicInteger(0);
+        Set<String> createdFolders = ConcurrentHashMap.newKeySet();
+        Set<String> addedNodePaths = ConcurrentHashMap.newKeySet();
+
+        UploadHandler handler = UploadHandler.inMemory((metadata, data) -> {
+            String fileName = metadata.fileName();
+            long contentLength = metadata.contentLength();
+
+            try {
+                // 统一路径分隔符
+                fileName = fileName.replace("\\", "/");
+
+                String targetPath = pathSelector.getSelectedPath();
+                String objectPath = targetPath + fileName;
+
+                // 确保所有父文件夹存在
+                ensureParentFolders(selectedBucket.getName(), objectPath, createdFolders);
+
+                // 增量添加文件夹节点到树
+                addFolderNodesToTree(objectPath, addedNodePaths);
+
+                // 上传文件
+                minioService.uploadFile(
+                        selectedBucket.getName(),
+                        objectPath,
+                        new ByteArrayInputStream(data),
+                        contentLength
+                );
+
+                uploadedCount.incrementAndGet();
+
+            } catch (Exception ex) {
+                failedCount.incrementAndGet();
+                log.error("上传失败: {}", fileName, ex);
+            }
+        });
+
+        Upload upload = new Upload(handler);
+        upload.setWidthFull();
+        upload.setDropAllowed(true);
+        String uploadId = "upload-" + System.currentTimeMillis();
+        upload.setId(uploadId);
+
+        // 文件上传被拒绝
+        upload.addFileRejectedListener(event -> {
+            showNotification("文件被拒绝: " + event.getErrorMessage(), NotificationVariant.LUMO_WARNING);
+        });
+
+        // 所有文件上传完成
+        upload.addAllFinishedListener(event -> {
+            int success = uploadedCount.get();
+            int failed = failedCount.get();
+
+            dialog.close();
+
+            if (failed > 0) {
+                showNotification(String.format("上传完成: 成功 %d 个, 失败 %d 个", success, failed),
+                        NotificationVariant.LUMO_WARNING);
+            } else {
+                showNotification(String.format("已上传 %d 个文件", success), NotificationVariant.LUMO_SUCCESS);
+            }
+        });
+
+        content.add(upload);
+
+        Button cancelButton = new Button("取消", e -> dialog.close());
+
+        dialog.add(content);
+        dialog.getFooter().add(cancelButton);
+        dialog.open();
+
+        // 在对话框打开后设置 webkitdirectory 属性并修复 vaadin-upload 的路径处理
+        getUI().ifPresent(ui -> ui.access(() -> {
+            ui.getPage().executeJs(
+                "setTimeout(function() {" +
+                "  var uploadEl = document.getElementById($0);" +
+                "  if (uploadEl) {" +
+                // 设置 webkitdirectory 属性
+                "    var input = uploadEl.querySelector('input[type=\"file\"]') || " +
+                "                (uploadEl.shadowRoot && uploadEl.shadowRoot.querySelector('input[type=\"file\"]'));" +
+                "    if (input) {" +
+                "      input.setAttribute('webkitdirectory', '');" +
+                "      input.setAttribute('directory', '');" +
+                "      input.setAttribute('mozdirectory', '');" +
+                "    }" +
+                // 修复 vaadin-upload 的 _addFiles 方法，使用 webkitRelativePath
+                "    if (uploadEl._addFiles) {" +
+                "      var originalAddFiles = uploadEl._addFiles.bind(uploadEl);" +
+                "      uploadEl._addFiles = function(files) {" +
+                "        var processedFiles = [];" +
+                "        for (var i = 0; i < files.length; i++) {" +
+                "          var file = files[i];" +
+                "          if (file.webkitRelativePath) {" +
+                // 使用 webkitRelativePath 作为文件名
+                "            var newFile = new File([file], file.webkitRelativePath, {type: file.type, lastModified: file.lastModified});" +
+                "            newFile.formDataName = file.formDataName || 'file';" +
+                "            processedFiles.push(newFile);" +
+                "          } else {" +
+                "            processedFiles.push(file);" +
+                "          }" +
+                "        }" +
+                "        originalAddFiles(processedFiles);" +
+                "      };" +
+                "    }" +
+                "  }" +
+                "}, 100);",
+                uploadId
+            );
+        }));
+    }
+
+    /**
+     * 添加文件路径中的所有文件夹节点到树
+     *
+     * @param objectPath     文件对象路径
+     * @param addedNodePaths 已添加的节点路径集合
+     */
+    private void addFolderNodesToTree(String objectPath, Set<String> addedNodePaths) {
+        String parentPath = minioService.extractParentPath(objectPath);
+        if (parentPath == null || parentPath.isEmpty()) {
+            return;
+        }
+
+        // 分解路径，逐级添加文件夹节点
+        String[] parts = parentPath.split("/");
+        StringBuilder currentPathBuilder = new StringBuilder();
+
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            currentPathBuilder.append(part).append("/");
+            String folderPath = currentPathBuilder.toString();
+
+            // 使用 Set 避免重复添加
+            if (addedNodePaths.add(folderPath)) {
+                // 创建文件夹节点
+                MinioTreeNode folderNode = MinioTreeNode.builder()
+                        .id(folderPath)
+                        .type(NodeType.FOLDER)
+                        .name(part)
+                        .path(folderPath)
+                        .bucket(selectedBucket.getName())
+                        .lastModified(LocalDateTime.now())
+                        .build();
+                addNodeToTree(folderNode);
+            }
+        }
+    }
+
+    /**
+     * 确保文件的所有父文件夹存在
+     * 使用 Set 跟踪已创建的文件夹，避免重复检查
+     *
+     * @param bucket         Bucket 名称
+     * @param objectPath     对象路径
+     * @param createdFolders 已创建的文件夹集合
+     */
+    private void ensureParentFolders(String bucket, String objectPath, Set<String> createdFolders) {
+        String parentPath = minioService.extractParentPath(objectPath);
+
+        if (parentPath == null || parentPath.isEmpty()) {
+            return;
+        }
+
+        // 分解路径，逐级确保文件夹存在
+        String[] parts = parentPath.split("/");
+        StringBuilder currentPathBuilder = new StringBuilder();
+
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            currentPathBuilder.append(part).append("/");
+            String folderPath = currentPathBuilder.toString();
+
+            // 使用 Set 的 add 方法来避免重复创建（add 返回 true 表示是新元素）
+            if (createdFolders.add(folderPath)) {
+                // 这是一个新文件夹，确保它存在
+                log.debug("创建文件夹: bucket={}, path={}", bucket, folderPath);
+                minioService.ensureFolderExists(bucket, folderPath);
+            }
+        }
+    }
+
+    private void showDeleteConfirmDialog(Set<MinioTreeNode> items) {
+        int fileCount = 0;
+        int folderCount = 0;
+        for (MinioTreeNode item : items) {
+            if (item.getType() == NodeType.FILE) {
+                fileCount++;
+            } else if (item.getType() == NodeType.FOLDER) {
+                folderCount++;
+            }
+        }
+
+        String message = String.format("确定删除 %d 个文件和 %d 个文件夹？此操作不可撤销。", fileCount, folderCount);
+
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle("确认删除");
+        dialog.setWidth("400px");
+
+        Span messageSpan = new Span(message);
+        messageSpan.getElement().getThemeList().add("warning");
+
+        Button deleteButton = new Button("删除", e -> {
+            try {
+                BatchDeleteResult result = minioService.batchDelete(
+                        selectedBucket.getName(),
+                        new ArrayList<>(items)
+                );
+                dialog.close();
+
+                // 增量删除节点
+                for (MinioTreeNode item : items) {
+                    removeNodeFromTree(item);
+                }
+
+                showNotification(String.format("已删除 %d 个文件, %d 个文件夹",
+                        result.getDeletedFiles(), result.getDeletedFolders()),
+                        NotificationVariant.LUMO_SUCCESS);
+            } catch (Exception ex) {
+                showNotification("删除失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+            }
+        });
+        deleteButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_ERROR);
+
+        Button cancelButton = new Button("取消", e -> dialog.close());
+
+        dialog.add(messageSpan);
+        dialog.getFooter().add(cancelButton, deleteButton);
+        dialog.open();
+    }
+
+    private void refreshFileTree() {
+        if (selectedBucket == null) return;
+        loadFileTreeData();
+    }
+
+    /**
+     * 增量添加节点到树
+     *
+     * @param node 要添加的节点
+     */
+    private void addNodeToTree(MinioTreeNode node) {
+        if (treeData == null || pathToNodeMap == null) return;
+
+        // 检查是否已存在
+        if (pathToNodeMap.containsKey(node.getPath())) {
+            return;
+        }
+
+        // 添加到 Map
+        pathToNodeMap.put(node.getPath(), node);
+
+        // 找到父节点
+        String parentPath = minioService.extractParentPath(node.getPath());
+        MinioTreeNode parent = parentPath != null && !parentPath.isEmpty() ? pathToNodeMap.get(parentPath) : null;
+
+        // 如果有父节点，检查并处理占位符
+        if (parent != null) {
+            List<MinioTreeNode> children = treeData.getChildren(parent);
+            if (!children.isEmpty()) {
+                MinioTreeNode firstChild = children.get(0);
+                if (firstChild.getPath().endsWith(".placeholder")) {
+                    // 父节点未展开过，需要加载完整内容
+                    // 移除占位符
+                    treeData.removeItem(firstChild);
+
+                    // 从服务器加载该目录的所有子节点
+                    List<MinioTreeNode> existingNodes = minioService.listObjects(parent.getBucket(), parent.getPath());
+                    for (MinioTreeNode existingNode : existingNodes) {
+                        if (!pathToNodeMap.containsKey(existingNode.getPath())) {
+                            pathToNodeMap.put(existingNode.getPath(), existingNode);
+                            treeData.addItem(parent, existingNode);
+
+                            // 如果是文件夹，添加占位符
+                            if (existingNode.getType() == NodeType.FOLDER) {
+                                addPlaceholderChild(existingNode);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 检查是否已经添加到 TreeData（可能在上面加载时已经添加了）
+        if (parent == null) {
+            // 根节点
+            treeData.addItem(null, node);
+        } else {
+            // 检查父节点的子节点中是否已包含此节点
+            List<MinioTreeNode> siblings = treeData.getChildren(parent);
+            boolean alreadyExists = siblings.stream().anyMatch(n -> n.getPath().equals(node.getPath()));
+            if (!alreadyExists) {
+                treeData.addItem(parent, node);
+            }
+        }
+
+        // 如果是文件夹，添加占位符子节点
+        if (node.getType() == NodeType.FOLDER) {
+            addPlaceholderChild(node);
+        }
+
+        // 刷新 DataProvider
+        treeDataProvider.refreshAll();
+    }
+
+    /**
+     * 增量删除节点
+     *
+     * @param node 要删除的节点
+     */
+    private void removeNodeFromTree(MinioTreeNode node) {
+        if (treeData == null || pathToNodeMap == null) return;
+
+        // 从 Map 中删除
+        pathToNodeMap.remove(node.getPath());
+
+        // 从 TreeData 中删除（会递归删除子节点）
+        try {
+            treeData.removeItem(node);
+        } catch (IllegalArgumentException e) {
+            // 节点可能已经不存在，忽略
+            log.debug("节点不存在，跳过删除: {}", node.getPath());
+        }
+
+        // 刷新 DataProvider
+        treeDataProvider.refreshAll();
+    }
+
+    // ==================== 搜索功能方法 ====================
+
+    private void initSearchField() {
+        // 回车触发搜索
+        searchField.addKeyPressListener(com.vaadin.flow.component.Key.ENTER, e -> {
+            String keyword = searchField.getValue().trim();
+            if (keyword.length() >= 2 && selectedBucket != null) {
+                performSearch(keyword);
+            } else if (keyword.length() < 2 && selectedBucket != null) {
+                showNotification("请输入至少 2 个字符", NotificationVariant.LUMO_WARNING);
+            }
+        });
+    }
+
+    private void performSearch(String keyword) {
+        // 每次都重新搜索（不做关键词相同判断）
+        currentSearchKeyword = keyword;
+        searchCursor = null;
+        searchResults = new ArrayList<>();
+
+        // 创建搜索结果对话框
+        if (searchDialog == null) {
+            searchDialog = new Dialog();
+            searchDialog.setHeaderTitle("搜索结果");
+            searchDialog.setWidth("800px");
+            searchDialog.setHeight("600px");
+
+            searchResultGrid = new Grid<>();
+            searchResultGrid.setWidthFull();
+            searchResultGrid.setHeight("500px");
+
+            // 文件名列
+            searchResultGrid.addColumn(MinioTreeNode::getName)
+                .setHeader("文件名")
+                .setAutoWidth(true);
+
+            // 路径列
+            searchResultGrid.addColumn(MinioTreeNode::getPath)
+                .setHeader("路径")
+                .setAutoWidth(true);
+
+            // 大小列
+            searchResultGrid.addColumn(node -> minioService.formatSize(node.getSize()))
+                .setHeader("大小")
+                .setWidth("100px");
+
+            // 修改时间列
+            searchResultGrid.addColumn(node -> {
+                if (node.getLastModified() == null) return "-";
+                return node.getLastModified().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+            }).setHeader("修改时间").setWidth("150px");
+
+            // 双击定位到文件树
+            searchResultGrid.addItemDoubleClickListener(e -> {
+                MinioTreeNode item = e.getItem();
+                navigateToItem(item);
+                searchDialog.close();
+            });
+
+            loadMoreButton = new Button("加载更多", e -> loadMoreSearchResults());
+            Button closeButton = new Button("关闭", e -> searchDialog.close());
+
+            HorizontalLayout footer = new HorizontalLayout(loadMoreButton, closeButton);
+            searchDialog.getFooter().add(footer);
+            searchDialog.add(searchResultGrid);
+        }
+
+        // 加载第一页结果
+        loadMoreSearchResults();
+
+        searchDialog.open();
+    }
+
+    private void loadMoreSearchResults() {
+        if (selectedBucket == null || currentSearchKeyword == null) {
+            return;
+        }
+
+        try {
+            PagedSearchResult result = minioService.searchPaged(
+                selectedBucket.getName(),
+                currentSearchKeyword,
+                searchCursor,
+                50
+            );
+
+            searchResults.addAll(result.getItems());
+            searchResultGrid.setItems(searchResults);
+            searchCursor = result.getNextCursor();
+
+            // 更新对话框标题
+            String title = String.format("搜索结果: \"%s\" (%d 条)",
+                currentSearchKeyword, searchResults.size());
+            if (result.isHasMore()) {
+                title += " - 点击\"加载更多\"";
+            }
+            searchDialog.setHeaderTitle(title);
+
+            // 更新加载更多按钮状态
+            loadMoreButton.setVisible(result.isHasMore());
+
+        } catch (Exception e) {
+            showNotification("搜索失败: " + e.getMessage(), NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    private void navigateToItem(MinioTreeNode item) {
+        String path = item.getPath();
+        String[] parts = path.split("/");
+
+        // 构建需要展开的父文件夹路径列表
+        List<String> pathsToExpand = new ArrayList<>();
+        StringBuilder currentPathBuilder = new StringBuilder();
+        for (int i = 0; i < parts.length - 1; i++) {
+            currentPathBuilder.append(parts[i]).append("/");
+            pathsToExpand.add(currentPathBuilder.toString());
+        }
+
+        // 异步展开父文件夹并选中目标
+        expandAndSelect(pathsToExpand, item, 0);
+    }
+
+    /**
+     * 递归展开父文件夹，最后选中目标节点
+     */
+    private void expandAndSelect(List<String> pathsToExpand, MinioTreeNode targetItem, int currentIndex) {
+        if (currentIndex >= pathsToExpand.size()) {
+            // 所有父文件夹已展开，选中目标节点
+            selectTargetNode(targetItem);
+            return;
+        }
+
+        String folderPath = pathsToExpand.get(currentIndex);
+        MinioTreeNode folderNode = pathToNodeMap.get(folderPath);
+
+        if (folderNode == null) {
+            // 文件夹节点不存在，可能需要先加载
+            showNotification("无法定位: " + folderPath, NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        // 检查文件夹是否已展开
+        if (fileTreeGrid.isExpanded(folderNode)) {
+            // 已展开，继续下一级
+            expandAndSelect(pathsToExpand, targetItem, currentIndex + 1);
+        } else {
+            // 展开文件夹并加载子节点
+            fileTreeGrid.expand(folderNode);
+            loadFolderChildren(folderNode);
+
+            // 延迟后继续展开下一级（等待数据加载）
+            fileTreeGrid.getUI().ifPresent(ui -> ui.access(() -> {
+                ui.beforeClientResponse(fileTreeGrid, ctx -> {
+                    expandAndSelect(pathsToExpand, targetItem, currentIndex + 1);
+                });
+            }));
+        }
+    }
+
+    /**
+     * 加载文件夹的子节点
+     */
+    private void loadFolderChildren(MinioTreeNode folderNode) {
+        List<MinioTreeNode> children = treeData.getChildren(folderNode);
+
+        // 检查是否已加载（不是占位符）
+        if (children.size() == 1 && children.get(0).getPath().endsWith(".placeholder")) {
+            // 移除占位符，加载真实数据
+            treeData.removeItem(children.get(0));
+            pathToNodeMap.remove(children.get(0).getPath());
+
+            List<MinioTreeNode> realChildren = minioService.listObjects(folderNode.getBucket(), folderNode.getPath());
+            for (MinioTreeNode child : realChildren) {
+                if (!pathToNodeMap.containsKey(child.getPath())) {
+                    pathToNodeMap.put(child.getPath(), child);
+                    treeData.addItem(folderNode, child);
+
+                    // 如果是文件夹，添加占位符
+                    if (child.getType() == NodeType.FOLDER) {
+                        addPlaceholderChild(child);
+                    }
+                }
+            }
+            treeDataProvider.refreshAll();
+        }
+    }
+
+        /**
+     * 选中目标节点
+     */
+    private void selectTargetNode(MinioTreeNode targetItem) {
+        // 确保 targetItem 在 pathToNodeMap 中
+        MinioTreeNode nodeToSelect = pathToNodeMap.get(targetItem.getPath());
+        if (nodeToSelect == null) {
+            showNotification("文件不存在: " + targetItem.getName(), NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        // 选中节点
+        fileTreeGrid.select(nodeToSelect);
+
+        // 获取扁平化列表中的索引
+        List<MinioTreeNode> flatList = flattenTreeData();
+        int targetIndex = -1;
+        for (int i = 0; i < flatList.size(); i++) {
+            if (flatList.get(i).equals(nodeToSelect)) {
+                targetIndex = i;
+                break;
+            }
+        }
+
+        if (targetIndex >= 0) {
+            // 滚动到目标索引之前的几行，让目标行出现在视口中上部
+            int scrollIndex = Math.max(0, targetIndex - 8);
+            final int index = scrollIndex;
+            UI.getCurrent().access(() -> {
+                UI.getCurrent().beforeClientResponse(fileTreeGrid, ctx -> {
+                    fileTreeGrid.getElement().executeJs("this.scrollToIndex($0)", index);
+                });
+            });
+        }
+
+        showNotification("已定位到: " + targetItem.getName(), NotificationVariant.LUMO_SUCCESS);
+    }
+
+    /**
+     * 推断默认路径
+     * - 如果选中文件夹 → 使用其路径
+     * - 如果选中文件 → 使用其父路径
+     * - 否则 → 根目录
+     */
+    private String inferDefaultPath() {
+        Optional<MinioTreeNode> selected = fileTreeGrid.getSelectionModel()
+                .getFirstSelectedItem();
+
+        if (selected.isPresent()) {
+            MinioTreeNode node = selected.get();
+            if (node.getType() == NodeType.FOLDER) {
+                return node.getPath();
+            } else if (node.getType() == NodeType.FILE) {
+                return minioService.extractParentPath(node.getPath());
+            }
+        }
+
+        return "";  // 根目录
+    }
+
+    /**
+     * 统计选中项目中的文件总数
+     */
+    private int countFilesInSelection(Set<MinioTreeNode> items) {
+        int count = 0;
+        for (MinioTreeNode item : items) {
+            if (item.getType() == NodeType.FILE) {
+                count++;
+            } else if (item.getType() == NodeType.FOLDER) {
+                // 递归统计文件夹中的文件数
+                count += countFilesInFolder(item.getBucket(), item.getPath());
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 统计文件夹中的文件数量
+     */
+    private int countFilesInFolder(String bucket, String folderPath) {
+        try {
+            if (!folderPath.endsWith("/")) {
+                folderPath += "/";
+            }
+
+            Iterable<io.minio.Result<io.minio.messages.Item>> results =
+                minioService.getMinioClient().listObjects(
+                    io.minio.ListObjectsArgs.builder()
+                        .bucket(bucket)
+                        .prefix(folderPath)
+                        .recursive(true)
+                        .build()
+                );
+
+            int count = 0;
+            for (io.minio.Result<io.minio.messages.Item> result : results) {
+                io.minio.messages.Item item = result.get();
+                if (!minioService.isPlaceholder(item.objectName()) && !item.isDir()) {
+                    count++;
+                }
+            }
+            return count;
+        } catch (Exception e) {
+            log.error("统计文件夹文件数失败: bucket={}, path={}", bucket, folderPath, e);
+            return 0;
+        }
+    }
+
+    private void downloadSingleFile(MinioTreeNode item) {
+        try {
+            // 先读取文件内容到内存
+            byte[] fileContent;
+            try (InputStream stream = minioService.downloadFile(item.getBucket(), item.getPath())) {
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] data = new byte[4096];
+                int nRead;
+                while ((nRead = stream.read(data, 0, data.length)) != -1) {
+                    buffer.write(data, 0, nRead);
+                }
+                buffer.flush();
+                fileContent = buffer.toByteArray();
+            }
+
+            // 使用 DownloadHandler 创建下载
+            DownloadHandler downloadHandler = DownloadHandler.fromInputStream(
+                    event -> new DownloadResponse(
+                            new ByteArrayInputStream(fileContent),
+                            item.getName(),
+                            "application/octet-stream",
+                            (long) fileContent.length
+                    )
+            );
+
+            // 使用 Anchor 组件触发下载（正确的 Vaadin 方式）
+            Anchor downloadLink = new Anchor();
+            downloadLink.setHref(downloadHandler);
+            downloadLink.getElement().setAttribute("download", true);
+            downloadLink.getElement().getStyle().set("display", "none");
+
+            // 添加到 UI 并触发点击
+            UI.getCurrent().access(() -> {
+                UI.getCurrent().add(downloadLink);
+                downloadLink.getElement().executeJs("this.click()");
+                // 延迟移除，确保下载开始
+                UI.getCurrent().getPage().executeJs(
+                    "setTimeout(function() { $0.remove(); }, 1000);",
+                    downloadLink.getElement()
+                );
+            });
+
+        } catch (Exception ex) {
+            showNotification("下载失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    /**
+     * 打包选中项目为 ZIP 并下载
+     */
+    private void downloadAsZip(Set<MinioTreeNode> items) {
+        try {
+            // 确定 ZIP 文件名
+            String zipFileName;
+            if (items.size() == 1) {
+                MinioTreeNode item = items.iterator().next();
+                zipFileName = item.getName() + ".zip";
+            } else {
+                zipFileName = "download.zip";
+            }
+
+            // 创建内存中的 ZIP
+            ByteArrayOutputStream zipBuffer = new ByteArrayOutputStream();
+            byte[] zipContent;
+
+            try (ZipOutputStream zipOut = new ZipOutputStream(zipBuffer)) {
+                // 用于跟踪已使用的 entry 名称，处理重复
+                Set<String> usedEntryNames = new HashSet<>();
+
+                // 遍历所有选中项，添加到 ZIP
+                for (MinioTreeNode item : items) {
+                    if (item.getType() == NodeType.FILE) {
+                        // 使用完整路径作为 entry 名称，确保唯一性
+                        String entryName = getUniqueEntryName(item.getPath(), usedEntryNames);
+                        addFileToZip(zipOut, item, entryName);
+                    } else if (item.getType() == NodeType.FOLDER) {
+                        addFolderToZip(zipOut, item.getBucket(), item.getPath(), usedEntryNames);
+                    }
+                }
+            }
+
+            // 发送下载
+            zipContent = zipBuffer.toByteArray();
+
+            DownloadHandler downloadHandler = DownloadHandler.fromInputStream(
+                    event -> new DownloadResponse(
+                            new ByteArrayInputStream(zipContent),
+                            zipFileName,
+                            "application/zip",
+                            (long) zipContent.length
+                    )
+            );
+
+            // 使用 Anchor 组件触发下载（正确的 Vaadin 方式）
+            Anchor downloadLink = new Anchor();
+            downloadLink.setHref(downloadHandler);
+            downloadLink.getElement().setAttribute("download", true);
+            downloadLink.getElement().getStyle().set("display", "none");
+
+            // 添加到 UI 并触发点击
+            UI.getCurrent().access(() -> {
+                UI.getCurrent().add(downloadLink);
+                downloadLink.getElement().executeJs("this.click()");
+                // 延迟移除，确保下载开始
+                UI.getCurrent().getPage().executeJs(
+                    "setTimeout(function() { $0.remove(); }, 1000);",
+                    downloadLink.getElement()
+                );
+            });
+
+        } catch (Exception ex) {
+            showNotification("下载失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+        }
+    }
+
+    /**
+     * 添加单个文件到 ZIP
+     */
+    private void addFileToZip(ZipOutputStream zipOut, MinioTreeNode item, String entryName) throws Exception {
+        ZipEntry entry = new ZipEntry(entryName);
+        zipOut.putNextEntry(entry);
+
+        try (InputStream stream = minioService.downloadFile(item.getBucket(), item.getPath())) {
+            byte[] buffer = new byte[4096];
+            int len;
+            while ((len = stream.read(buffer)) > 0) {
+                zipOut.write(buffer, 0, len);
+            }
+        }
+        zipOut.closeEntry();
+    }
+
+    /**
+     * 递归添加文件夹到 ZIP
+     */
+    private void addFolderToZip(ZipOutputStream zipOut, String bucket, String folderPath, Set<String> usedEntryNames) throws Exception {
+        if (!folderPath.endsWith("/")) {
+            folderPath += "/";
+        }
+
+        Iterable<io.minio.Result<io.minio.messages.Item>> results =
+            minioService.getMinioClient().listObjects(
+                io.minio.ListObjectsArgs.builder()
+                    .bucket(bucket)
+                    .prefix(folderPath)
+                    .recursive(true)
+                    .build()
+            );
+
+        for (io.minio.Result<io.minio.messages.Item> result : results) {
+            io.minio.messages.Item item = result.get();
+            String objectName = item.objectName();
+
+            if (minioService.isPlaceholder(objectName) || item.isDir()) {
+                continue;
+            }
+
+            // 使用完整路径作为 entry 名称，确保唯一性
+            String entryName = getUniqueEntryName(objectName, usedEntryNames);
+
+            ZipEntry entry = new ZipEntry(entryName);
+            zipOut.putNextEntry(entry);
+
+            try (InputStream stream = minioService.downloadFile(bucket, objectName)) {
+                byte[] buffer = new byte[4096];
+                int len;
+                while ((len = stream.read(buffer)) > 0) {
+                    zipOut.write(buffer, 0, len);
+                }
+            }
+            zipOut.closeEntry();
+        }
+    }
+
+    /**
+     * 获取唯一的 ZIP entry 名称，处理重复文件名
+     */
+    private String getUniqueEntryName(String path, Set<String> usedEntryNames) {
+        // 去掉前导的 "/"
+        String entryName = path.startsWith("/") ? path.substring(1) : path;
+
+        // 如果已经存在，添加数字后缀
+        if (usedEntryNames.contains(entryName)) {
+            int counter = 1;
+            String baseName = entryName;
+            int dotIndex = entryName.lastIndexOf('.');
+            String extension = "";
+            String nameWithoutExt = entryName;
+
+            if (dotIndex > 0 && dotIndex < entryName.length() - 1) {
+                extension = entryName.substring(dotIndex);
+                nameWithoutExt = entryName.substring(0, dotIndex);
+            }
+
+            while (usedEntryNames.contains(entryName)) {
+                entryName = nameWithoutExt + "_" + counter + extension;
+                counter++;
+            }
+        }
+
+        usedEntryNames.add(entryName);
+        return entryName;
+    }
+
+    /**
+     * 获取两个节点之间所有已加载的节点（用于 Shift 范围选择）
+     */
+    private List<MinioTreeNode> getNodesBetween(MinioTreeNode a, MinioTreeNode b) {
+        // 扁平化遍历 TreeData，获取所有已加载节点
+        List<MinioTreeNode> allNodes = flattenTreeData();
+
+        // 找到两个节点的索引
+        int indexA = -1;
+        int indexB = -1;
+        for (int i = 0; i < allNodes.size(); i++) {
+            MinioTreeNode node = allNodes.get(i);
+            if (node.equals(a)) {
+                indexA = i;
+            }
+            if (node.equals(b)) {
+                indexB = i;
+            }
+        }
+
+        if (indexA == -1 || indexB == -1) {
+            return new ArrayList<>();
+        }
+
+        // 返回范围内的节点
+        int start = Math.min(indexA, indexB);
+        int end = Math.max(indexA, indexB);
+        return new ArrayList<>(allNodes.subList(start, end + 1));
+    }
+
+    /**
+     * 扁平化遍历 TreeData，获取所有已加载节点
+     */
+    private List<MinioTreeNode> flattenTreeData() {
+        List<MinioTreeNode> result = new ArrayList<>();
+        if (treeData == null) {
+            return result;
+        }
+
+        // 递归遍历
+        List<MinioTreeNode> roots = treeData.getRootItems();
+        for (MinioTreeNode root : roots) {
+            flattenNode(root, result);
+        }
+        return result;
+    }
+
+    /**
+     * 递归扁平化单个节点及其子节点
+     */
+    private void flattenNode(MinioTreeNode node, List<MinioTreeNode> result) {
+        // 过滤掉占位符节点
+        if (!node.getPath().endsWith(".placeholder")) {
+            result.add(node);
+        }
+
+        List<MinioTreeNode> children = treeData.getChildren(node);
+        for (MinioTreeNode child : children) {
+            flattenNode(child, result);
+        }
+    }
+}
