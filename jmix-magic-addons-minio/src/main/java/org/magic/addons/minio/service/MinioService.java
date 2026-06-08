@@ -1,5 +1,6 @@
 package org.magic.addons.minio.service;
 
+import org.magic.addons.minio.MinioProperties;
 import org.magic.addons.minio.dto.*;
 import io.minio.*;
 import io.minio.messages.DeleteObject;
@@ -28,13 +29,54 @@ public class MinioService {
     private static final String PLACEHOLDER_FILE = ".minio_placeholder";
 
     @Autowired
-    private MinioClient minioClient;
+    private MinioProperties minioProperties;
+
+    // 缓存的 MinioClient 实例（懒重建：参数变化时才重建）
+    private volatile MinioClient cachedClient;
+    private volatile String cachedEndpoint;
+    private volatile String cachedAccessKey;
+    private volatile String cachedSecretKey;
 
     /**
-     * 获取 MinioClient 实例，用于高级操作
+     * 获取 MinioClient 实例（懒重建）。
+     * <p>
+     * 检测到 endpoint/accessKey/secretKey 变化时才重建，否则复用缓存实例。
+     * OkHttp 内部维护连接池和调度器线程池，复用可避免资源浪费。
+     */
+    private MinioClient getClient() {
+        String endpoint = minioProperties.getEndpoint();
+        String accessKey = minioProperties.getAccessKey();
+        String secretKey = minioProperties.getSecretKey();
+
+        if (cachedClient != null
+                && eq(endpoint, cachedEndpoint)
+                && eq(accessKey, cachedAccessKey)
+                && eq(secretKey, cachedSecretKey)) {
+            return cachedClient;
+        }
+
+        MinioClient client = MinioClient.builder()
+                .endpoint(endpoint)
+                .credentials(accessKey, secretKey)
+                .build();
+
+        cachedClient = client;
+        cachedEndpoint = endpoint;
+        cachedAccessKey = accessKey;
+        cachedSecretKey = secretKey;
+
+        return client;
+    }
+
+    private static boolean eq(String a, String b) {
+        return (a == null && b == null) || (a != null && a.equals(b));
+    }
+
+    /**
+     * 获取 MinioClient 实例，用于高级操作。
      */
     public MinioClient getMinioClient() {
-        return minioClient;
+        return getClient();
     }
 
     // ==================== 辅助方法 ====================
@@ -91,7 +133,7 @@ public class MinioService {
 
     public List<MinioBucketDto> listBuckets() {
         try {
-            List<io.minio.messages.Bucket> buckets = minioClient.listBuckets();
+            List<io.minio.messages.Bucket> buckets = getClient().listBuckets();
             return buckets.stream()
                     .map(b -> new MinioBucketDto(b.name(),
                             b.creationDate() != null ?
@@ -105,13 +147,13 @@ public class MinioService {
 
     public void createBucket(String name) {
         try {
-            boolean exists = minioClient.bucketExists(
+            boolean exists = getClient().bucketExists(
                     BucketExistsArgs.builder().bucket(name).build()
             );
             if (exists) {
                 throw new IllegalArgumentException("Bucket 名称已存在: " + name);
             }
-            minioClient.makeBucket(MakeBucketArgs.builder().bucket(name).build());
+            getClient().makeBucket(MakeBucketArgs.builder().bucket(name).build());
         } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
@@ -122,13 +164,13 @@ public class MinioService {
 
     public void deleteBucket(String name) {
         try {
-            Iterable<io.minio.Result<Item>> items = minioClient.listObjects(
+            Iterable<io.minio.Result<Item>> items = getClient().listObjects(
                     ListObjectsArgs.builder().bucket(name).recursive(true).build()
             );
             if (items.iterator().hasNext()) {
                 throw new IllegalStateException("Bucket 不为空，无法删除");
             }
-            minioClient.removeBucket(RemoveBucketArgs.builder().bucket(name).build());
+            getClient().removeBucket(RemoveBucketArgs.builder().bucket(name).build());
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -139,7 +181,7 @@ public class MinioService {
 
     public boolean bucketExists(String name) {
         try {
-            return minioClient.bucketExists(
+            return getClient().bucketExists(
                     BucketExistsArgs.builder().bucket(name).build()
             );
         } catch (Exception e) {
@@ -156,7 +198,7 @@ public class MinioService {
      */
     public List<MinioTreeNode> listAllObjects(String bucket) {
         try {
-            Iterable<io.minio.Result<Item>> results = minioClient.listObjects(
+            Iterable<io.minio.Result<Item>> results = getClient().listObjects(
                     ListObjectsArgs.builder()
                             .bucket(bucket)
                             .recursive(true)
@@ -212,7 +254,7 @@ public class MinioService {
                 prefix = "";
             }
 
-            Iterable<io.minio.Result<Item>> results = minioClient.listObjects(
+            Iterable<io.minio.Result<Item>> results = getClient().listObjects(
                     ListObjectsArgs.builder()
                             .bucket(bucket)
                             .prefix(prefix)
@@ -278,7 +320,7 @@ public class MinioService {
 
             String placeholderPath = folderPath + PLACEHOLDER_FILE;
 
-            minioClient.putObject(
+            getClient().putObject(
                     PutObjectArgs.builder()
                             .bucket(bucket)
                             .object(placeholderPath)
@@ -309,7 +351,7 @@ public class MinioService {
             // 检查文件夹的占位文件是否存在
             String placeholderPath = folderPath + PLACEHOLDER_FILE;
 
-            minioClient.statObject(
+            getClient().statObject(
                     StatObjectArgs.builder()
                             .bucket(bucket)
                             .object(placeholderPath)
@@ -351,7 +393,7 @@ public class MinioService {
                 folderPath += "/";
             }
 
-            Iterable<io.minio.Result<Item>> results = minioClient.listObjects(
+            Iterable<io.minio.Result<Item>> results = getClient().listObjects(
                     ListObjectsArgs.builder()
                             .bucket(bucket)
                             .prefix(folderPath)
@@ -366,7 +408,7 @@ public class MinioService {
             }
 
             if (!objectsToDelete.isEmpty()) {
-                minioClient.removeObjects(
+                getClient().removeObjects(
                         RemoveObjectsArgs.builder()
                                 .bucket(bucket)
                                 .objects(objectsToDelete)
@@ -387,7 +429,7 @@ public class MinioService {
                 throw new IllegalArgumentException("不允许上传系统保留文件名: " + PLACEHOLDER_FILE);
             }
 
-            minioClient.putObject(
+            getClient().putObject(
                     PutObjectArgs.builder()
                             .bucket(bucket)
                             .object(objectName)
@@ -406,7 +448,7 @@ public class MinioService {
 
     public InputStream downloadFile(String bucket, String objectName) {
         try {
-            return minioClient.getObject(
+            return getClient().getObject(
                     GetObjectArgs.builder()
                             .bucket(bucket)
                             .object(objectName)
@@ -420,7 +462,7 @@ public class MinioService {
 
     public void deleteFile(String bucket, String objectName) {
         try {
-            minioClient.removeObject(
+            getClient().removeObject(
                     RemoveObjectArgs.builder()
                             .bucket(bucket)
                             .object(objectName)
@@ -436,7 +478,7 @@ public class MinioService {
 
     public MinioTreeNode getFileInfo(String bucket, String objectName) {
         try {
-            StatObjectResponse stat = minioClient.statObject(
+            StatObjectResponse stat = getClient().statObject(
                     StatObjectArgs.builder()
                             .bucket(bucket)
                             .object(objectName)
@@ -481,7 +523,7 @@ public class MinioService {
                         folderPath += "/";
                     }
 
-                    Iterable<io.minio.Result<Item>> folderItems = minioClient.listObjects(
+                    Iterable<io.minio.Result<Item>> folderItems = getClient().listObjects(
                             ListObjectsArgs.builder()
                                     .bucket(bucket)
                                     .prefix(folderPath)
@@ -511,7 +553,7 @@ public class MinioService {
             try {
                 // removeObjects 返回 Iterable，必须遍历才会实际执行删除
                 Iterable<io.minio.Result<io.minio.messages.DeleteError>> deleteResults =
-                    minioClient.removeObjects(
+                    getClient().removeObjects(
                         RemoveObjectsArgs.builder()
                                 .bucket(bucket)
                                 .objects(allObjectsToDelete)
@@ -563,7 +605,7 @@ public class MinioService {
                 argsBuilder.startAfter(startAfter);
             }
 
-            Iterable<io.minio.Result<Item>> items = minioClient.listObjects(argsBuilder.build());
+            Iterable<io.minio.Result<Item>> items = getClient().listObjects(argsBuilder.build());
 
             List<MinioTreeNode> matchedItems = new ArrayList<>();
             String lastProcessedKey = startAfter;

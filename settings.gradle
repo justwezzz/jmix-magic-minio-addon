@@ -1,4 +1,4 @@
-rootProject.name = 'jmix-minio-addon'
+rootProject.name = 'jmix-magic-addons-minio'
 
 include 'jmix-magic-addons-minio'
 include 'jmix-magic-addons-minio-starter'

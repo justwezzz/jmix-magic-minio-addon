@@ -43,7 +43,21 @@ jmix.minio.upload.max-size=50MB
 
 ### 方式一：通过菜单访问
 
-插件会自动在菜单中添加 "MinIO" -> "MinIO 文件浏览器" 菜单项。
+#### 自动合并菜单（composite-menu=true）
+
+当宿主项目 `application.properties` 设置 `jmix.ui.composite-menu=true` 时，插件菜单会自动合并到宿主菜单中。
+
+#### 手动添加菜单（composite-menu=false，推荐）
+
+当 `jmix.ui.composite-menu=false` 时，需要手动在宿主项目的 `menu.xml` 中添加菜单项：
+
+```xml
+<menu id="data-management" title="数据管理" opened="true">
+    <item view="minio_BrowserView" title="MinIO 管理"/>
+</menu>
+```
+
+> **提示**：推荐使用 `composite-menu=false` + 手动添加菜单，这样可以精确控制菜单位置和层级，避免无关的插件菜单混入。
 
 ### 方式二：在视图中引用
 
