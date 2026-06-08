@@ -499,6 +499,42 @@ public class MinioBrowserView extends StandardView {
         return true;
     }
 
+    /**
+     * 创建 Vaadin Upload 组件的 i18n 配置，使用 Jmix Messages 翻译
+     */
+    private com.vaadin.flow.component.upload.UploadI18N createUploadI18n() {
+        com.vaadin.flow.component.upload.UploadI18N i18n = new com.vaadin.flow.component.upload.UploadI18N();
+        i18n.setDropFiles(new com.vaadin.flow.component.upload.UploadI18N.DropFiles()
+                .setOne(msg("minioBrowserView.uploadI18n.dropFilesOne"))
+                .setMany(msg("minioBrowserView.uploadI18n.dropFilesMany")))
+            .setAddFiles(new com.vaadin.flow.component.upload.UploadI18N.AddFiles()
+                .setOne(msg("minioBrowserView.uploadI18n.addFilesOne"))
+                .setMany(msg("minioBrowserView.uploadI18n.addFilesMany")))
+            .setError(new com.vaadin.flow.component.upload.UploadI18N.Error()
+                .setTooManyFiles(msg("minioBrowserView.uploadI18n.errorTooManyFiles"))
+                .setFileIsTooBig(msg("minioBrowserView.uploadI18n.errorFileTooBig"))
+                .setIncorrectFileType(msg("minioBrowserView.uploadI18n.errorIncorrectFileType")))
+            .setUploading(new com.vaadin.flow.component.upload.UploadI18N.Uploading()
+                .setStatus(new com.vaadin.flow.component.upload.UploadI18N.Uploading.Status()
+                    .setConnecting(msg("minioBrowserView.uploadI18n.statusConnecting"))
+                    .setStalled(msg("minioBrowserView.uploadI18n.statusStalled"))
+                    .setProcessing(msg("minioBrowserView.uploadI18n.statusProcessing"))
+                    .setHeld(msg("minioBrowserView.uploadI18n.statusHeld")))
+                .setRemainingTime(new com.vaadin.flow.component.upload.UploadI18N.Uploading.RemainingTime()
+                    .setPrefix(msg("minioBrowserView.uploadI18n.remainingTimePrefix"))
+                    .setUnknown(msg("minioBrowserView.uploadI18n.remainingTimeUnknown")))
+                .setError(new com.vaadin.flow.component.upload.UploadI18N.Uploading.Error()
+                    .setServerUnavailable(msg("minioBrowserView.uploadI18n.errorServerUnavailable"))
+                    .setUnexpectedServerError(msg("minioBrowserView.uploadI18n.errorUnexpectedServerError"))
+                    .setForbidden(msg("minioBrowserView.uploadI18n.errorForbidden"))))
+            .setFile(new com.vaadin.flow.component.upload.UploadI18N.File()
+                .setRetry(msg("minioBrowserView.uploadI18n.fileRetry"))
+                .setStart(msg("minioBrowserView.uploadI18n.fileStart"))
+                .setRemove(msg("minioBrowserView.uploadI18n.fileRemove")))
+            .setUnits(List.of(msg("minioBrowserView.uploadI18n.units").split("[\\s,]+")));
+        return i18n;
+    }
+
     private void showNotification(String message, NotificationVariant variant) {
         Notification notification = new Notification(message, 3000, Notification.Position.BOTTOM_END);
         notification.addThemeVariants(variant);
@@ -854,6 +890,7 @@ public class MinioBrowserView extends StandardView {
         Upload upload = new Upload(handler);
         upload.setMaxFiles(1);
         upload.setWidthFull();
+        upload.setI18n(createUploadI18n());
 
         upload.addFileRejectedListener(event -> {
             showNotification(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()), NotificationVariant.LUMO_ERROR);
@@ -928,6 +965,7 @@ public class MinioBrowserView extends StandardView {
         Upload upload = new Upload(handler);
         upload.setWidthFull();
         upload.setDropAllowed(true);
+        upload.setI18n(createUploadI18n());
         String uploadId = "upload-" + System.currentTimeMillis();
         upload.setId(uploadId);
 

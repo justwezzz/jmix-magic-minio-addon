@@ -6,10 +6,10 @@
 
 - **Bucket 管理**：创建、删除、重命名 Bucket
 - **文件浏览**：树形结构懒加载浏览文件
-- **文件上传**：支持单文件和文件夹上传（保留目录结构）
+- **文件上传**：支持单文件和文件夹上传（保留目录结构），已汉化
 - **文件下载**：单文件下载和多文件 ZIP 打包下载
 - **搜索功能**：分页搜索文件
-- **批量操作**：批量删除、Shift 范围选择
+- **批量操作**：批量删除、Shift 范围选择、右键菜单
 
 ## 安装
 
@@ -19,7 +19,7 @@
 
 ```groovy
 dependencies {
-    implementation 'org.magic.addons:jmix-magic-addons-minio-starter:1.0.0-SNAPSHOT'
+    implementation 'org.magic.addons:jmix-magic-addons-minio-starter:0.0.1'
 }
 ```
 
@@ -80,39 +80,49 @@ public class MyMinioView extends MinioBrowserView {
 @Autowired
 private MinioService minioService;
 
-// 使用示例
-public void uploadFile() {
-    minioService.uploadFile(bucket, objectName, inputStream, size);
-}
+// Bucket 操作
+minioService.listBuckets();
+minioService.createBucket(name);
+minioService.deleteBucket(name);
+minioService.renameBucket(oldName, newName);
 
-public List<MinioTreeNode> listFiles(String bucket, String path) {
-    return minioService.listObjects(bucket, path);
-}
+// 文件操作
+minioService.listObjects(bucket, prefix);
+minioService.uploadFile(bucket, objectName, inputStream, size);
+minioService.downloadFile(bucket, objectName);
+minioService.deleteFile(bucket, objectName);
+minioService.createFolder(bucket, folderPath);
+minioService.batchDelete(bucket, items);
+
+// 辅助方法
+minioService.countFiles(bucket, folderPath);
+minioService.listFolderObjectPaths(bucket, folderPath);
+minioService.formatSize(bytes);
 ```
 
 ## 安全配置
 
-插件提供三个预定义角色：
-
-| 角色代码 | 角色 | 权限说明 |
-|---------|------|----------|
-| `minio-minimal` | 最小权限 | 只读：浏览、下载 |
-| `minio-user` | 用户权限 | 常用：浏览、上传、下载、删除 |
-| `minio-admin` | 管理员权限 | 完整：包括 Bucket 管理 |
-
-在项目中分配角色：
+插件不预定义角色。请在宿主项目中根据需要自定义角色和权限，通过 `@ViewPolicy` 控制视图访问：
 
 ```java
-@ResourceRoleReference(roleCode = "minio-user")
-public class MyUserRole {
+@ResourceRole(name = "MinIO User", code = "minio-user")
+public interface MinioUserRole {
+
+    @ViewPolicy(viewIds = "minio_BrowserView")
+    void minioBrowserView();
 }
 ```
+
+## i18n
+
+插件内置中文和英文双语支持，会根据用户 Locale 自动切换。
 
 ## 技术栈
 
 - Jmix 2.8.1
 - Vaadin Flow
 - MinIO Java SDK 8.5.10
+- 零外部依赖（不含 Lombok）
 
 ## 构建
 
