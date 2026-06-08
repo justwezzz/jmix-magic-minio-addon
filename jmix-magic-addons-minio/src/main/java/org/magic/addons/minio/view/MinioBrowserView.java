@@ -6,6 +6,12 @@ import io.jmix.flowui.view.ViewController;
 import io.jmix.flowui.view.ViewDescriptor;
 import io.jmix.flowui.view.ViewComponent;
 import io.jmix.flowui.view.Subscribe;
+import io.jmix.flowui.component.grid.DataGrid;
+import io.jmix.flowui.component.grid.TreeDataGrid;
+import io.jmix.flowui.data.grid.ContainerDataGridItems;
+import io.jmix.flowui.kit.action.ActionPerformedEvent;
+import io.jmix.flowui.model.CollectionContainer;
+import io.jmix.flowui.model.DataComponents;
 import org.magic.addons.minio.component.PathSelector;
 import org.magic.addons.minio.dto.BatchDeleteResult;
 import org.magic.addons.minio.dto.MinioBucketDto;
@@ -36,15 +42,11 @@ import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
 import com.vaadin.flow.data.renderer.ComponentRenderer;
 import com.vaadin.flow.server.streams.DownloadHandler;
 import com.vaadin.flow.server.streams.DownloadResponse;
-import io.jmix.flowui.component.grid.DataGrid;
-import io.jmix.flowui.component.grid.TreeDataGrid;
-import io.jmix.flowui.data.grid.ContainerDataGridItems;
-import io.jmix.flowui.kit.action.ActionPerformedEvent;
-import io.jmix.flowui.model.CollectionContainer;
-import io.jmix.flowui.model.DataComponents;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+
+import io.jmix.flowui.view.MessageBundle;
 
 import jakarta.annotation.PostConstruct;
 
@@ -86,6 +88,9 @@ public class MinioBrowserView extends StandardView {
     private DataComponents dataComponents;
 
     @ViewComponent
+    private MessageBundle messageBundle;
+
+    @ViewComponent
     private DataGrid<MinioBucketDto> bucketDataGrid;
 
     private CollectionContainer<MinioBucketDto> bucketDc;
@@ -107,12 +112,6 @@ public class MinioBrowserView extends StandardView {
 
     @ViewComponent
     private Button createFolderBtn;
-
-    @ViewComponent
-    private Button deleteFileBtn;
-
-    @ViewComponent
-    private Button selectAllFilesBtn;
 
     @ViewComponent
     private Button refreshFileBtn;
@@ -139,11 +138,24 @@ public class MinioBrowserView extends StandardView {
     private List<MinioTreeNode> searchResults;
     private Button loadMoreButton;
 
+    // ==================== i18n helpers ====================
+
+    private String msg(String key) {
+        return messageBundle.getMessage(key);
+    }
+
+    private String msg(String key, Object... args) {
+        return String.format(messageBundle.getMessage(key), args);
+    }
+
     @Subscribe
     public void onInit(final InitEvent event) {
         // 创建集合容器用于绑定 DataGrid
         bucketDc = dataComponents.createCollectionContainer(MinioBucketDto.class);
         bucketDataGrid.setItems(new ContainerDataGridItems<>(bucketDc));
+
+        // 搜索框弹性宽度
+        searchField.getStyle().set("flex-grow", "1");
 
         initBucketGrid();
         initFileTreeGrid();
@@ -164,7 +176,7 @@ public class MinioBrowserView extends StandardView {
     @Subscribe("uploadFileAction")
     public void onUploadFileAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
-            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
             return;
         }
         showUploadFileDialog();
@@ -173,7 +185,7 @@ public class MinioBrowserView extends StandardView {
     @Subscribe("uploadFolderAction")
     public void onUploadFolderAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
-            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
             return;
         }
         showUploadFolderDialog();
@@ -196,7 +208,7 @@ public class MinioBrowserView extends StandardView {
             layout.add(icon, name);
 
             return layout;
-        })).setHeader("名称").setKey("nameWithIcon").setAutoWidth(true);
+        })).setHeader(msg("minioBrowserView.columnName")).setKey("nameWithIcon").setAutoWidth(true);
 
         // 格式化创建时间列
         bucketDataGrid.addColumn(new ComponentRenderer<>(bucket -> {
@@ -206,7 +218,7 @@ public class MinioBrowserView extends StandardView {
             }
             String formatted = date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
             return new Span(formatted);
-        })).setHeader("创建时间").setKey("creationDateFormatted").setAutoWidth(true);
+        })).setHeader(msg("minioBrowserView.columnCreationDate")).setKey("creationDateFormatted").setAutoWidth(true);
 
         // 选择事件
         bucketDataGrid.addSelectionListener(e -> {
@@ -221,7 +233,7 @@ public class MinioBrowserView extends StandardView {
             bucketDataGrid.setItems(new ContainerDataGridItems<>(bucketDc));
         } catch (Exception e) {
             // 显示错误提示
-            statsLabel.setText("无法连接到 MinIO 服务");
+            statsLabel.setText(msg("minioBrowserView.connectionFailed"));
         }
     }
 
@@ -278,7 +290,7 @@ public class MinioBrowserView extends StandardView {
         MinioTreeNode placeholder = MinioTreeNode.builder()
                 .id(parent.getPath() + ".placeholder")
                 .type(NodeType.FILE)
-                .name("加载中...")
+                .name(msg("minioBrowserView.placeholderLoading"))
                 .path(parent.getPath() + ".placeholder")
                 .bucket(parent.getBucket())
                 .build();
@@ -324,11 +336,11 @@ public class MinioBrowserView extends StandardView {
 
     private void updateStats() {
         if (selectedBucket == null) {
-            statsLabel.setText("请选择一个 Bucket");
+            statsLabel.setText(msg("minioBrowserView.selectBucket"));
             return;
         }
         // 简单统计：基于当前已加载的数据
-        statsLabel.setText("Bucket: " + selectedBucket.getName());
+        statsLabel.setText(String.format(msg("minioBrowserView.statsBucketLabel"), selectedBucket.getName()));
     }
 
     // ==================== Bucket 操作方法 ====================
@@ -342,35 +354,35 @@ public class MinioBrowserView extends StandardView {
     public void onRefreshBucketBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
         loadBuckets();
         clearFileTree();
-        showNotification("Bucket 列表已刷新", NotificationVariant.LUMO_SUCCESS);
+        showNotification(msg("minioBrowserView.bucketListRefreshed"), NotificationVariant.LUMO_SUCCESS);
     }
 
     private void showCreateBucketDialog() {
         Dialog dialog = new Dialog();
-        dialog.setHeaderTitle("创建 Bucket");
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogCreateBucketTitle"));
         dialog.setWidth("400px");
 
-        TextField nameField = new TextField("Bucket 名称");
+        TextField nameField = new TextField(msg("minioBrowserView.dialogBucketNameField"));
         nameField.setWidthFull();
         nameField.setRequired(true);
-        nameField.setHelperText("3-63 个字符，仅限小写字母、数字和短横线");
+        nameField.setHelperText(msg("minioBrowserView.dialogBucketNameHelper"));
 
-        Button createButton = new Button("创建", e -> {
+        Button createButton = new Button(msg("minioBrowserView.dialogCreate"), e -> {
             String name = nameField.getValue().trim();
             if (validateBucketName(name)) {
                 try {
                     minioService.createBucket(name);
                     dialog.close();
                     loadBuckets();
-                    showNotification("Bucket 创建成功", NotificationVariant.LUMO_SUCCESS);
+                    showNotification(msg("minioBrowserView.bucketCreated"), NotificationVariant.LUMO_SUCCESS);
                 } catch (Exception ex) {
-                    showNotification("创建失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                    showNotification(String.format(msg("minioBrowserView.createFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
                 }
             }
         });
         createButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
 
-        Button cancelButton = new Button("取消", e -> dialog.close());
+        Button cancelButton = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
 
         dialog.add(nameField);
         dialog.getFooter().add(cancelButton, createButton);
@@ -381,33 +393,33 @@ public class MinioBrowserView extends StandardView {
     private void onDeleteBucketClick() {
         MinioBucketDto selected = bucketDataGrid.getSingleSelectedItem();
         if (selected == null) {
-            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
             return;
         }
 
         Dialog dialog = new Dialog();
-        dialog.setHeaderTitle("删除 Bucket");
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogDeleteBucketTitle"));
         dialog.setWidth("400px");
 
-        Span message = new Span("确定要删除 Bucket '" + selected.getName() + "' 吗？此操作不可撤销。");
+        Span message = new Span(String.format(msg("minioBrowserView.dialogDeleteBucketConfirm"), selected.getName()));
         message.getElement().getThemeList().add("warning");
 
-        Button deleteButton = new Button("删除", e -> {
+        Button deleteButton = new Button(msg("minioBrowserView.dialogDelete"), e -> {
             try {
                 minioService.deleteBucket(selected.getName());
                 dialog.close();
                 loadBuckets();
                 clearFileTree();
-                showNotification("Bucket 删除成功", NotificationVariant.LUMO_SUCCESS);
+                showNotification(msg("minioBrowserView.bucketDeleted"), NotificationVariant.LUMO_SUCCESS);
             } catch (IllegalStateException ex) {
-                showNotification("删除失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                showNotification(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
             } catch (Exception ex) {
-                showNotification("删除失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                showNotification(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
             }
         });
         deleteButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_ERROR);
 
-        Button cancelButton = new Button("取消", e -> dialog.close());
+        Button cancelButton = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
 
         dialog.add(message);
         dialog.getFooter().add(cancelButton, deleteButton);
@@ -417,24 +429,24 @@ public class MinioBrowserView extends StandardView {
     private void onRenameBucketClick() {
         MinioBucketDto selected = bucketDataGrid.getSingleSelectedItem();
         if (selected == null) {
-            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
             return;
         }
 
         Dialog dialog = new Dialog();
-        dialog.setHeaderTitle("重命名 Bucket");
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogRenameBucketTitle"));
         dialog.setWidth("400px");
 
-        TextField nameField = new TextField("新名称");
+        TextField nameField = new TextField(msg("minioBrowserView.dialogNewName"));
         nameField.setWidthFull();
         nameField.setValue(selected.getName());
         nameField.setRequired(true);
-        nameField.setHelperText("3-63 个字符，仅限小写字母、数字和短横线");
+        nameField.setHelperText(msg("minioBrowserView.dialogBucketNameHelper"));
 
-        Button renameButton = new Button("重命名", e -> {
+        Button renameButton = new Button(msg("minioBrowserView.dialogRename"), e -> {
             String newName = nameField.getValue().trim();
             if (newName.equals(selected.getName())) {
-                showNotification("新名称与原名称相同", NotificationVariant.LUMO_WARNING);
+                showNotification(msg("minioBrowserView.sameName"), NotificationVariant.LUMO_WARNING);
                 return;
             }
             if (validateBucketName(newName)) {
@@ -443,15 +455,15 @@ public class MinioBrowserView extends StandardView {
                     dialog.close();
                     loadBuckets();
                     clearFileTree();
-                    showNotification("Bucket 重命名成功", NotificationVariant.LUMO_SUCCESS);
+                    showNotification(msg("minioBrowserView.bucketRenamed"), NotificationVariant.LUMO_SUCCESS);
                 } catch (Exception ex) {
-                    showNotification("重命名失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                    showNotification(String.format(msg("minioBrowserView.renameFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
                 }
             }
         });
         renameButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
 
-        Button cancelButton = new Button("取消", e -> dialog.close());
+        Button cancelButton = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
 
         dialog.add(nameField);
         dialog.getFooter().add(cancelButton, renameButton);
@@ -505,34 +517,34 @@ public class MinioBrowserView extends StandardView {
             minioService.deleteBucket(oldName);
 
         } catch (Exception e) {
-            throw new RuntimeException("重命名过程中出错: " + e.getMessage(), e);
+            throw new RuntimeException(String.format(msg("minioBrowserView.renameError"), e.getMessage()), e);
         }
     }
 
     private boolean validateBucketName(String name) {
         if (name == null || name.isEmpty()) {
-            showNotification("Bucket 名称不能为空", NotificationVariant.LUMO_ERROR);
+            showNotification(msg("minioBrowserView.validationBucketNameEmpty"), NotificationVariant.LUMO_ERROR);
             return false;
         }
         if (name.length() < 3 || name.length() > 63) {
-            showNotification("Bucket 名称长度必须为 3-63 个字符", NotificationVariant.LUMO_ERROR);
+            showNotification(msg("minioBrowserView.validationBucketNameLength"), NotificationVariant.LUMO_ERROR);
             return false;
         }
-        // MinIO/MinIO Bucket 命名规则：
+        // MinIO Bucket 命名规则：
         // - 只能包含小写字母、数字和短横线
         // - 必须以字母或数字开头和结尾
         if (!name.matches("^[a-z0-9][a-z0-9-]*[a-z0-9]$") && name.length() > 1) {
-            showNotification("Bucket 名称只能包含小写字母、数字和短横线，且必须以字母或数字开头和结尾", NotificationVariant.LUMO_ERROR);
+            showNotification(msg("minioBrowserView.validationBucketNamePattern"), NotificationVariant.LUMO_ERROR);
             return false;
         }
         // 单字符情况
         if (name.length() == 1 && !name.matches("^[a-z0-9]$")) {
-            showNotification("Bucket 名称只能包含小写字母或数字", NotificationVariant.LUMO_ERROR);
+            showNotification(msg("minioBrowserView.validationBucketNameAlphanumeric"), NotificationVariant.LUMO_ERROR);
             return false;
         }
         // 两字符情况
         if (name.length() == 2 && !name.matches("^[a-z0-9][a-z0-9]$")) {
-            showNotification("Bucket 名称只能包含小写字母或数字", NotificationVariant.LUMO_ERROR);
+            showNotification(msg("minioBrowserView.validationBucketNameAlphanumeric"), NotificationVariant.LUMO_ERROR);
             return false;
         }
         return true;
@@ -550,7 +562,7 @@ public class MinioBrowserView extends StandardView {
         treeDataProvider = new TreeDataProvider<>(treeData);
         fileTreeGrid.setDataProvider(treeDataProvider);
         selectedBucket = null;
-        statsLabel.setText("请选择一个 Bucket");
+        statsLabel.setText(msg("minioBrowserView.selectBucket"));
     }
 
     // ==================== 文件操作方法 ====================
@@ -558,32 +570,32 @@ public class MinioBrowserView extends StandardView {
     @Subscribe(id = "createFolderBtn", subject = "clickListener")
     public void onCreateFolderBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
         if (selectedBucket == null) {
-            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
             return;
         }
         showCreateFolderDialog();
     }
 
-    @Subscribe(id = "deleteFileBtn", subject = "clickListener")
-    public void onDeleteFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+    @Subscribe("deleteFilesAction")
+    public void onDeleteFilesAction(final ActionPerformedEvent event) {
         Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
         if (selected.isEmpty()) {
-            showNotification("请先选择要删除的文件或文件夹", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectFilesToDelete"), NotificationVariant.LUMO_WARNING);
             return;
         }
         showDeleteConfirmDialog(selected);
     }
 
-    @Subscribe(id = "selectAllFilesBtn", subject = "clickListener")
-    public void onSelectAllFilesBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+    @Subscribe("selectAllFilesAction")
+    public void onSelectAllFilesAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
-            showNotification("请先选择一个 Bucket", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
             return;
         }
 
         // 从内存中获取所有节点
         if (pathToNodeMap == null || pathToNodeMap.isEmpty()) {
-            showNotification("当前目录没有文件", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.noFilesInDirectory"), NotificationVariant.LUMO_WARNING);
             return;
         }
 
@@ -596,11 +608,11 @@ public class MinioBrowserView extends StandardView {
         if (isAllSelected) {
             // 已全选，则清空选择（全反选）
             fileTreeGrid.deselectAll();
-            showNotification("已取消全选", NotificationVariant.LUMO_SUCCESS);
+            showNotification(msg("minioBrowserView.deselectAll"), NotificationVariant.LUMO_SUCCESS);
         } else {
             // 未全选，则全选
             fileTreeGrid.asMultiSelect().setValue(allItems.stream().collect(Collectors.toSet()));
-            showNotification(String.format("已选择 %d 个项目", allItems.size()), NotificationVariant.LUMO_SUCCESS);
+            showNotification(String.format(msg("minioBrowserView.selectedCount"), allItems.size()), NotificationVariant.LUMO_SUCCESS);
         }
     }
 
@@ -608,22 +620,41 @@ public class MinioBrowserView extends StandardView {
     public void onRefreshFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
         if (selectedBucket != null) {
             refreshFileTree();
-            showNotification("文件列表已刷新", NotificationVariant.LUMO_SUCCESS);
+            showNotification(msg("minioBrowserView.filesRefreshed"), NotificationVariant.LUMO_SUCCESS);
         }
     }
 
     @Subscribe(id = "downloadFileBtn", subject = "clickListener")
     public void onDownloadFileBtnClick(final com.vaadin.flow.component.ClickEvent<Button> event) {
+        doDownloadSelected();
+    }
+
+    @Subscribe("fileTreeGrid.ctxDownload")
+    public void onCtxDownload(final ActionPerformedEvent event) {
+        doDownloadSelected();
+    }
+
+    @Subscribe("fileTreeGrid.ctxDelete")
+    public void onCtxDelete(final ActionPerformedEvent event) {
         Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
         if (selected.isEmpty()) {
-            showNotification("请先选择要下载的项目", NotificationVariant.LUMO_WARNING);
+            showNotification(msg("minioBrowserView.selectFilesToDelete"), NotificationVariant.LUMO_WARNING);
+            return;
+        }
+        showDeleteConfirmDialog(selected);
+    }
+
+    private void doDownloadSelected() {
+        Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
+        if (selected.isEmpty()) {
+            showNotification(msg("minioBrowserView.selectToDownload"), NotificationVariant.LUMO_WARNING);
             return;
         }
 
         // 统计文件数量
         int fileCount = countFilesInSelection(selected);
         if (downloadMaxFiles > 0 && fileCount > downloadMaxFiles) {
-            showNotification(String.format("选中文件过多（%d 个），请分批下载（最多 %d 个）",
+            showNotification(String.format(msg("minioBrowserView.tooManyFiles"),
                     fileCount, downloadMaxFiles), NotificationVariant.LUMO_WARNING);
             return;
         }
@@ -632,14 +663,11 @@ public class MinioBrowserView extends StandardView {
         if (selected.size() == 1) {
             MinioTreeNode item = selected.iterator().next();
             if (item.getType() == NodeType.FILE) {
-                // 单个文件：直接下载
                 downloadSingleFile(item);
             } else {
-                // 单个文件夹：打包 ZIP
                 downloadAsZip(selected);
             }
         } else {
-            // 多个项目：打包 ZIP
             downloadAsZip(selected);
         }
     }
@@ -651,27 +679,37 @@ public class MinioBrowserView extends StandardView {
         treeDataProvider = new TreeDataProvider<>(treeData);
         fileTreeGrid.setDataProvider(treeDataProvider);
 
-        // 名称列（使用层级列保留树形结构）
-        fileTreeGrid.addHierarchyColumn(node -> {
-            // 使用 Unicode 符号作为图标前缀
-            String iconPrefix;
+        // 名称列（使用层级列保留树形结构，用 VaadinIcon 替代 emoji）
+        fileTreeGrid.addComponentHierarchyColumn(node -> {
+            HorizontalLayout layout = new HorizontalLayout();
+            layout.setAlignItems(com.vaadin.flow.component.orderedlayout.FlexComponent.Alignment.CENTER);
+            layout.setSpacing(true);
+            layout.setPadding(false);
+            layout.setMargin(false);
+
+            Icon icon;
             if (node.getType() == NodeType.FOLDER) {
-                iconPrefix = "📁 ";  // 文件夹图标
+                icon = VaadinIcon.FOLDER.create();
+                icon.setColor("#FFA726");
             } else {
-                iconPrefix = getFileIconPrefix(node.getName());  // 根据扩展名选择图标
+                icon = getFileIcon(node.getName());
             }
-            return iconPrefix + node.getName();
-        }).setHeader("名称").setKey("name").setAutoWidth(true);
+            icon.setSize("16px");
+
+            Span name = new Span(node.getName());
+            layout.add(icon, name);
+            return layout;
+        }).setHeader(msg("minioBrowserView.columnName")).setKey("name").setAutoWidth(true);
 
         fileTreeGrid.addColumn(node -> {
             if (node.getSize() == null) return "-";
             return minioService.formatSize(node.getSize());
-        }).setHeader("大小").setKey("size").setWidth("100px");
+        }).setHeader(msg("minioBrowserView.columnSize")).setKey("size").setWidth("100px");
 
         fileTreeGrid.addColumn(node -> {
             if (node.getLastModified() == null) return "-";
             return node.getLastModified().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
-        }).setHeader("修改时间").setKey("lastModified").setWidth("150px");
+        }).setHeader(msg("minioBrowserView.columnLastModified")).setKey("lastModified").setWidth("150px");
 
         // Shift + 点击范围选择（使用 ClientItemToggleListener）
         GridMultiSelectionModel<MinioTreeNode> selectionModel =
@@ -706,36 +744,42 @@ public class MinioBrowserView extends StandardView {
     }
 
     /**
-     * 根据文件扩展名获取对应的 Unicode 图标前缀
+     * 根据文件扩展名获取对应的 VaadinIcon 图标
      */
-    private String getFileIconPrefix(String fileName) {
+    private Icon getFileIcon(String fileName) {
         String extension = getFileExtension(fileName).toLowerCase();
 
-        return switch (extension) {
+        VaadinIcon vaadinIcon = switch (extension) {
             // 图片文件
-            case "jpg", "jpeg", "png", "gif", "bmp", "svg", "webp", "ico" -> "🖼️ ";
-            // 文档文件
-            case "pdf" -> "📄 ";
-            case "doc", "docx" -> "📝 ";
-            case "xls", "xlsx", "csv" -> "📊 ";
-            case "ppt", "pptx" -> "📽️ ";
+            case "jpg", "jpeg", "png", "gif", "bmp", "svg", "webp", "ico" -> VaadinIcon.PICTURE;
+            // PDF
+            case "pdf" -> VaadinIcon.FILE_TEXT;
+            // Word
+            case "doc", "docx" -> VaadinIcon.FILE_TEXT;
+            // Excel/CSV
+            case "xls", "xlsx", "csv" -> VaadinIcon.TABLE;
+            // PowerPoint
+            case "ppt", "pptx" -> VaadinIcon.FILE_TEXT;
             // 代码文件
-            case "java", "js", "ts", "py", "go", "rs", "c", "cpp", "h", "cs", "php", "rb", "swift", "kt", "scala" -> "💻 ";
+            case "java", "js", "ts", "py", "go", "rs", "c", "cpp", "h", "cs", "php", "rb", "swift", "kt", "scala"
+                -> VaadinIcon.CODE;
             // 标记语言和配置
-            case "html", "htm", "css", "scss", "sass", "less", "xml", "json", "yaml", "yml", "md", "markdown", "sql" -> "📜 ";
+            case "html", "htm", "css", "scss", "sass", "less", "xml", "json", "yaml", "yml", "md", "markdown", "sql"
+                -> VaadinIcon.FILE_CODE;
             // 压缩文件
-            case "zip", "rar", "7z", "tar", "gz", "bz2" -> "📦 ";
+            case "zip", "rar", "7z", "tar", "gz", "bz2" -> VaadinIcon.FILE_ZIP;
             // 音频文件
-            case "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a" -> "🎵 ";
+            case "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a" -> VaadinIcon.HEADPHONES;
             // 视频文件
-            case "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm" -> "🎬 ";
-            // 可执行文件
-            case "exe", "msi", "dmg", "app", "deb", "rpm" -> "⚙️ ";
-            // 字体文件
-            case "ttf", "otf", "woff", "woff2", "eot" -> "🔤 ";
+            case "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm" -> VaadinIcon.MOVIE;
             // 默认文件图标
-            default -> "📄 ";
+            default -> VaadinIcon.FILE;
         };
+
+        Icon icon = vaadinIcon.create();
+        icon.setSize("16px");
+        icon.setColor("#666666");
+        return icon;
     }
 
     /**
@@ -754,7 +798,7 @@ public class MinioBrowserView extends StandardView {
 
     private void showCreateFolderDialog() {
         Dialog dialog = new Dialog();
-        dialog.setHeaderTitle("新建文件夹");
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogCreateFolderTitle"));
         dialog.setWidth("500px");
 
         VerticalLayout content = new VerticalLayout();
@@ -767,16 +811,16 @@ public class MinioBrowserView extends StandardView {
         pathSelector.setSelectedPath(inferDefaultPath());
 
         // 文件夹名称输入
-        TextField nameField = new TextField("文件夹名称");
+        TextField nameField = new TextField(msg("minioBrowserView.dialogFolderNameField"));
         nameField.setWidthFull();
         nameField.setRequired(true);
 
         content.add(pathSelector, nameField);
 
-        Button createButton = new Button("创建", e -> {
+        Button createButton = new Button(msg("minioBrowserView.dialogCreate"), e -> {
             String name = nameField.getValue().trim();
             if (name.isEmpty()) {
-                showNotification("请输入文件夹名称", NotificationVariant.LUMO_WARNING);
+                showNotification(msg("minioBrowserView.validationFolderNameEmpty"), NotificationVariant.LUMO_WARNING);
                 return;
             }
             try {
@@ -796,14 +840,14 @@ public class MinioBrowserView extends StandardView {
                         .build();
                 addNodeToTree(folderNode);
 
-                showNotification("文件夹创建成功", NotificationVariant.LUMO_SUCCESS);
+                showNotification(msg("minioBrowserView.folderCreated"), NotificationVariant.LUMO_SUCCESS);
             } catch (Exception ex) {
-                showNotification("创建失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                showNotification(String.format(msg("minioBrowserView.createFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
             }
         });
         createButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
 
-        Button cancelButton = new Button("取消", e -> dialog.close());
+        Button cancelButton = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
 
         dialog.add(content);
         dialog.getFooter().add(cancelButton, createButton);
@@ -813,7 +857,7 @@ public class MinioBrowserView extends StandardView {
 
     private void showUploadFileDialog() {
         Dialog dialog = new Dialog();
-        dialog.setHeaderTitle("上传文件");
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogUploadFileTitle"));
         dialog.setWidth("500px");
 
         VerticalLayout content = new VerticalLayout();
@@ -852,9 +896,9 @@ public class MinioBrowserView extends StandardView {
                         .build();
                 addNodeToTree(newNode);
 
-                showNotification("文件上传成功: " + fileName, NotificationVariant.LUMO_SUCCESS);
+                showNotification(String.format(msg("minioBrowserView.fileUploaded"), fileName), NotificationVariant.LUMO_SUCCESS);
             } catch (Exception ex) {
-                showNotification("上传失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                showNotification(String.format(msg("minioBrowserView.uploadFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
             }
         });
 
@@ -863,12 +907,12 @@ public class MinioBrowserView extends StandardView {
         upload.setWidthFull();
 
         upload.addFileRejectedListener(event -> {
-            showNotification("文件被拒绝: " + event.getErrorMessage(), NotificationVariant.LUMO_ERROR);
+            showNotification(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()), NotificationVariant.LUMO_ERROR);
         });
 
         content.add(pathSelector, upload);
 
-        Button cancelButton = new Button("关闭", e -> dialog.close());
+        Button cancelButton = new Button(msg("minioBrowserView.dialogClose"), e -> dialog.close());
 
         dialog.add(content);
         dialog.getFooter().add(cancelButton);
@@ -877,7 +921,7 @@ public class MinioBrowserView extends StandardView {
 
     private void showUploadFolderDialog() {
         Dialog dialog = new Dialog();
-        dialog.setHeaderTitle("上传文件夹");
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogUploadFolderTitle"));
         dialog.setWidth("600px");
 
         VerticalLayout content = new VerticalLayout();
@@ -889,10 +933,7 @@ public class MinioBrowserView extends StandardView {
         pathSelector.setSelectedPath(inferDefaultPath());
 
         // 说明文字
-        Span infoText = new Span(
-            "点击下方按钮选择本地文件夹。\n" +
-            "文件夹名称将自动识别，目录结构将被完整保留。"
-        );
+        Span infoText = new Span(msg("minioBrowserView.uploadFolderInfoText"));
         infoText.getElement().setProperty("whiteSpace", "pre-wrap");
         content.add(pathSelector, infoText);
 
@@ -943,7 +984,7 @@ public class MinioBrowserView extends StandardView {
 
         // 文件上传被拒绝
         upload.addFileRejectedListener(event -> {
-            showNotification("文件被拒绝: " + event.getErrorMessage(), NotificationVariant.LUMO_WARNING);
+            showNotification(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()), NotificationVariant.LUMO_WARNING);
         });
 
         // 所有文件上传完成
@@ -954,16 +995,16 @@ public class MinioBrowserView extends StandardView {
             dialog.close();
 
             if (failed > 0) {
-                showNotification(String.format("上传完成: 成功 %d 个, 失败 %d 个", success, failed),
+                showNotification(String.format(msg("minioBrowserView.uploadPartial"), success, failed),
                         NotificationVariant.LUMO_WARNING);
             } else {
-                showNotification(String.format("已上传 %d 个文件", success), NotificationVariant.LUMO_SUCCESS);
+                showNotification(String.format(msg("minioBrowserView.uploadComplete"), success), NotificationVariant.LUMO_SUCCESS);
             }
         });
 
         content.add(upload);
 
-        Button cancelButton = new Button("取消", e -> dialog.close());
+        Button cancelButton = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
 
         dialog.add(content);
         dialog.getFooter().add(cancelButton);
@@ -1090,16 +1131,16 @@ public class MinioBrowserView extends StandardView {
             }
         }
 
-        String message = String.format("确定删除 %d 个文件和 %d 个文件夹？此操作不可撤销。", fileCount, folderCount);
+        String message = String.format(msg("minioBrowserView.dialogDeleteFilesConfirm"), fileCount, folderCount);
 
         Dialog dialog = new Dialog();
-        dialog.setHeaderTitle("确认删除");
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogConfirmDeleteTitle"));
         dialog.setWidth("400px");
 
         Span messageSpan = new Span(message);
         messageSpan.getElement().getThemeList().add("warning");
 
-        Button deleteButton = new Button("删除", e -> {
+        Button deleteButton = new Button(msg("minioBrowserView.dialogDelete"), e -> {
             try {
                 BatchDeleteResult result = minioService.batchDelete(
                         selectedBucket.getName(),
@@ -1112,16 +1153,16 @@ public class MinioBrowserView extends StandardView {
                     removeNodeFromTree(item);
                 }
 
-                showNotification(String.format("已删除 %d 个文件, %d 个文件夹",
+                showNotification(String.format(msg("minioBrowserView.filesDeleted"),
                         result.getDeletedFiles(), result.getDeletedFolders()),
                         NotificationVariant.LUMO_SUCCESS);
             } catch (Exception ex) {
-                showNotification("删除失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+                showNotification(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
             }
         });
         deleteButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_ERROR);
 
-        Button cancelButton = new Button("取消", e -> dialog.close());
+        Button cancelButton = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
 
         dialog.add(messageSpan);
         dialog.getFooter().add(cancelButton, deleteButton);
@@ -1234,7 +1275,7 @@ public class MinioBrowserView extends StandardView {
             if (keyword.length() >= 2 && selectedBucket != null) {
                 performSearch(keyword);
             } else if (keyword.length() < 2 && selectedBucket != null) {
-                showNotification("请输入至少 2 个字符", NotificationVariant.LUMO_WARNING);
+                showNotification(msg("minioBrowserView.searchMinLength"), NotificationVariant.LUMO_WARNING);
             }
         });
     }
@@ -1248,7 +1289,7 @@ public class MinioBrowserView extends StandardView {
         // 创建搜索结果对话框
         if (searchDialog == null) {
             searchDialog = new Dialog();
-            searchDialog.setHeaderTitle("搜索结果");
+            searchDialog.setHeaderTitle(msg("minioBrowserView.searchDialogTitle"));
             searchDialog.setWidth("800px");
             searchDialog.setHeight("600px");
 
@@ -1258,24 +1299,24 @@ public class MinioBrowserView extends StandardView {
 
             // 文件名列
             searchResultGrid.addColumn(MinioTreeNode::getName)
-                .setHeader("文件名")
+                .setHeader(msg("minioBrowserView.columnFileName"))
                 .setAutoWidth(true);
 
             // 路径列
             searchResultGrid.addColumn(MinioTreeNode::getPath)
-                .setHeader("路径")
+                .setHeader(msg("minioBrowserView.columnPath"))
                 .setAutoWidth(true);
 
             // 大小列
             searchResultGrid.addColumn(node -> minioService.formatSize(node.getSize()))
-                .setHeader("大小")
+                .setHeader(msg("minioBrowserView.columnSize"))
                 .setWidth("100px");
 
             // 修改时间列
             searchResultGrid.addColumn(node -> {
                 if (node.getLastModified() == null) return "-";
                 return node.getLastModified().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
-            }).setHeader("修改时间").setWidth("150px");
+            }).setHeader(msg("minioBrowserView.columnLastModified")).setWidth("150px");
 
             // 双击定位到文件树
             searchResultGrid.addItemDoubleClickListener(e -> {
@@ -1284,8 +1325,8 @@ public class MinioBrowserView extends StandardView {
                 searchDialog.close();
             });
 
-            loadMoreButton = new Button("加载更多", e -> loadMoreSearchResults());
-            Button closeButton = new Button("关闭", e -> searchDialog.close());
+            loadMoreButton = new Button(msg("minioBrowserView.searchLoadMore"), e -> loadMoreSearchResults());
+            Button closeButton = new Button(msg("minioBrowserView.dialogClose"), e -> searchDialog.close());
 
             HorizontalLayout footer = new HorizontalLayout(loadMoreButton, closeButton);
             searchDialog.getFooter().add(footer);
@@ -1316,10 +1357,10 @@ public class MinioBrowserView extends StandardView {
             searchCursor = result.getNextCursor();
 
             // 更新对话框标题
-            String title = String.format("搜索结果: \"%s\" (%d 条)",
+            String title = String.format(msg("minioBrowserView.searchResultTitle"),
                 currentSearchKeyword, searchResults.size());
             if (result.isHasMore()) {
-                title += " - 点击\"加载更多\"";
+                title += msg("minioBrowserView.searchResultHasMore");
             }
             searchDialog.setHeaderTitle(title);
 
@@ -1327,7 +1368,7 @@ public class MinioBrowserView extends StandardView {
             loadMoreButton.setVisible(result.isHasMore());
 
         } catch (Exception e) {
-            showNotification("搜索失败: " + e.getMessage(), NotificationVariant.LUMO_ERROR);
+            showNotification(String.format(msg("minioBrowserView.searchFailed"), e.getMessage()), NotificationVariant.LUMO_ERROR);
         }
     }
 
@@ -1362,7 +1403,7 @@ public class MinioBrowserView extends StandardView {
 
         if (folderNode == null) {
             // 文件夹节点不存在，可能需要先加载
-            showNotification("无法定位: " + folderPath, NotificationVariant.LUMO_WARNING);
+            showNotification(String.format(msg("minioBrowserView.cannotLocate"), folderPath), NotificationVariant.LUMO_WARNING);
             return;
         }
 
@@ -1419,7 +1460,7 @@ public class MinioBrowserView extends StandardView {
         // 确保 targetItem 在 pathToNodeMap 中
         MinioTreeNode nodeToSelect = pathToNodeMap.get(targetItem.getPath());
         if (nodeToSelect == null) {
-            showNotification("文件不存在: " + targetItem.getName(), NotificationVariant.LUMO_WARNING);
+            showNotification(String.format(msg("minioBrowserView.fileNotFound"), targetItem.getName()), NotificationVariant.LUMO_WARNING);
             return;
         }
 
@@ -1447,7 +1488,7 @@ public class MinioBrowserView extends StandardView {
             });
         }
 
-        showNotification("已定位到: " + targetItem.getName(), NotificationVariant.LUMO_SUCCESS);
+        showNotification(String.format(msg("minioBrowserView.located"), targetItem.getName()), NotificationVariant.LUMO_SUCCESS);
     }
 
     /**
@@ -1563,7 +1604,7 @@ public class MinioBrowserView extends StandardView {
             });
 
         } catch (Exception ex) {
-            showNotification("下载失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+            showNotification(String.format(msg("minioBrowserView.downloadFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
         }
     }
 
@@ -1631,7 +1672,7 @@ public class MinioBrowserView extends StandardView {
             });
 
         } catch (Exception ex) {
-            showNotification("下载失败: " + ex.getMessage(), NotificationVariant.LUMO_ERROR);
+            showNotification(String.format(msg("minioBrowserView.downloadFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
         }
     }
 

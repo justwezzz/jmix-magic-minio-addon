@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <menu-config xmlns="http://jmix.io/schema/flowui/menu">
-    <menu id="minio" title="MinIO">
-        <item view="minio_BrowserView" title="MinIO 文件浏览器"/>
+    <menu id="minio" title="msg://org.magic.addons.minio/menu.minio">
+        <item view="minio_BrowserView" title="msg://org.magic.addons.minio/menu.minioBrowser"/>
     </menu>
 </menu-config>

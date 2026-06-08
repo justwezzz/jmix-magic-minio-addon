@@ -7,13 +7,16 @@
         <action id="deleteBucketAction" text="msg://minioBrowserView.deleteBucket" icon="TRASH"/>
         <action id="uploadFileAction" text="msg://minioBrowserView.uploadFile" icon="FILE_ADD"/>
         <action id="uploadFolderAction" text="msg://minioBrowserView.uploadFolder" icon="FOLDER_ADD"/>
+        <action id="deleteFilesAction" text="msg://minioBrowserView.delete" icon="TRASH"/>
+        <action id="selectAllFilesAction" text="msg://minioBrowserView.selectAll" icon="CHECK"/>
+        <action id="downloadAction" text="msg://minioBrowserView.download" icon="DOWNLOAD"/>
     </actions>
     <layout>
         <split id="mainSplit" orientation="HORIZONTAL" width="100%" height="100%"
                splitterPosition="30">
 
             <!-- 左侧：Bucket 列表 -->
-            <vbox id="bucketPanel" width="100%" height="100%" padding="false">
+            <vbox id="bucketPanel" width="100%" height="100%" padding="false" classNames="pl-xxs pr-s">
                 <hbox id="bucketToolbar" classNames="buttons-panel" width="100%">
                     <button id="createBucketBtn" text="msg://minioBrowserView.createBucket"
                             icon="PLUS" themeNames="primary"/>
@@ -28,12 +31,17 @@
                 </hbox>
 
                 <dataGrid id="bucketDataGrid" width="100%" height="100%"
+                          minHeight="400px"
                           selectionMode="SINGLE" metaClass="minio_MinioBucketDto">
                 </dataGrid>
+
+                <hbox id="statsBar" classNames="stats-bar" width="100%">
+                    <span id="statsLabel" text="msg://minioBrowserView.selectBucket"/>
+                </hbox>
             </vbox>
 
             <!-- 右侧：文件列表 -->
-            <vbox id="filePanel" width="100%" height="100%" padding="false">
+            <vbox id="filePanel" width="100%" height="100%" padding="false" classNames="pl-s">
                 <hbox id="fileToolbar" classNames="buttons-panel" width="100%">
                     <button id="createFolderBtn" text="msg://minioBrowserView.createFolder"
                             icon="FOLDER_ADD"/>
@@ -46,12 +54,16 @@
                     </dropdownButton>
                     <button id="downloadFileBtn" text="msg://minioBrowserView.download"
                             icon="DOWNLOAD"/>
-                    <button id="deleteFileBtn" text="msg://minioBrowserView.delete"
-                            icon="TRASH"/>
-                    <button id="selectAllFilesBtn" text="全选" icon="CHECK"/>
+                    <dropdownButton id="fileMoreBtn" text="msg://minioBrowserView.more"
+                                    icon="ELLIPSIS_DOTS_H">
+                        <items>
+                            <actionItem id="selectAllFilesItem" ref="selectAllFilesAction"/>
+                            <actionItem id="deleteFilesItem" ref="deleteFilesAction"/>
+                        </items>
+                    </dropdownButton>
                     <button id="refreshFileBtn" icon="REFRESH"/>
                     <textField id="searchField" placeholder="msg://minioBrowserView.searchPlaceholder"
-                               clearButtonVisible="true" width="15em">
+                               clearButtonVisible="true">
                         <prefix>
                             <icon icon="SEARCH"/>
                         </prefix>
@@ -61,11 +73,16 @@
                 <treeDataGrid id="fileTreeGrid" width="100%" height="100%"
                               selectionMode="MULTI" metaClass="minio_MinioTreeNode"
                               hierarchyProperty="parent">
+                    <actions showInContextMenuEnabled="false">
+                        <action id="ctxDownload" text="msg://minioBrowserView.download" icon="DOWNLOAD"/>
+                        <action id="ctxDelete" text="msg://minioBrowserView.delete" icon="TRASH"/>
+                    </actions>
+                    <contextMenu>
+                        <item action="fileTreeGrid.ctxDownload" icon="DOWNLOAD"/>
+                        <separator/>
+                        <item action="fileTreeGrid.ctxDelete" icon="TRASH"/>
+                    </contextMenu>
                 </treeDataGrid>
-
-                <hbox id="statsBar" classNames="stats-bar" width="100%">
-                    <span id="statsLabel" text="msg://minioBrowserView.selectBucket"/>
-                </hbox>
             </vbox>
 
         </split>

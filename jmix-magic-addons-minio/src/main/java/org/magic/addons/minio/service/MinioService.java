@@ -1,12 +1,12 @@
 package org.magic.addons.minio.service;
 
+import io.jmix.core.Messages;
 import org.magic.addons.minio.MinioProperties;
 import org.magic.addons.minio.dto.*;
 import io.minio.*;
 import io.minio.messages.DeleteObject;
 import io.minio.messages.Item;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
@@ -26,16 +26,31 @@ import java.util.stream.Collectors;
 @Service
 public class MinioService {
 
+    private static final String MSG_PREFIX = "org.magic.addons.minio/";
+
     private static final String PLACEHOLDER_FILE = ".minio_placeholder";
 
-    @Autowired
-    private MinioProperties minioProperties;
+    private final MinioProperties minioProperties;
+    private final Messages messages;
 
     // 缓存的 MinioClient 实例（懒重建：参数变化时才重建）
     private volatile MinioClient cachedClient;
     private volatile String cachedEndpoint;
     private volatile String cachedAccessKey;
     private volatile String cachedSecretKey;
+
+    public MinioService(MinioProperties minioProperties, Messages messages) {
+        this.minioProperties = minioProperties;
+        this.messages = messages;
+    }
+
+    private String msg(String key) {
+        return messages.getMessage(MSG_PREFIX + key);
+    }
+
+    private String msg(String key, Object... args) {
+        return String.format(messages.getMessage(MSG_PREFIX + key), args);
+    }
 
     /**
      * 获取 MinioClient 实例（懒重建）。
@@ -141,7 +156,7 @@ public class MinioService {
                     .collect(Collectors.toList());
         } catch (Exception e) {
             log.error("获取 Bucket 列表失败", e);
-            throw new RuntimeException("无法连接到 MinIO 服务", e);
+            throw new RuntimeException(msg("service.connectionFailed"), e);
         }
     }
 
@@ -151,14 +166,14 @@ public class MinioService {
                     BucketExistsArgs.builder().bucket(name).build()
             );
             if (exists) {
-                throw new IllegalArgumentException("Bucket 名称已存在: " + name);
+                throw new IllegalArgumentException(msg("service.bucketNameExists", name));
             }
             getClient().makeBucket(MakeBucketArgs.builder().bucket(name).build());
         } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
             log.error("创建 Bucket 失败: {}", name, e);
-            throw new RuntimeException("创建 Bucket 失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.bucketCreateFailed", e.getMessage()), e);
         }
     }
 
@@ -168,14 +183,14 @@ public class MinioService {
                     ListObjectsArgs.builder().bucket(name).recursive(true).build()
             );
             if (items.iterator().hasNext()) {
-                throw new IllegalStateException("Bucket 不为空，无法删除");
+                throw new IllegalStateException(msg("service.bucketNotEmpty"));
             }
             getClient().removeBucket(RemoveBucketArgs.builder().bucket(name).build());
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
             log.error("删除 Bucket 失败: {}", name, e);
-            throw new RuntimeException("删除 Bucket 失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.bucketDeleteFailed", e.getMessage()), e);
         }
     }
 
@@ -244,7 +259,7 @@ public class MinioService {
             return nodes;
         } catch (Exception e) {
             log.error("列出所有对象失败: bucket={}", bucket, e);
-            throw new RuntimeException("获取文件列表失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.fileListFailed", e.getMessage()), e);
         }
     }
 
@@ -308,7 +323,7 @@ public class MinioService {
             return nodes;
         } catch (Exception e) {
             log.error("列出对象失败: bucket={}, prefix={}", bucket, prefix, e);
-            throw new RuntimeException("获取文件列表失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.fileListFailed", e.getMessage()), e);
         }
     }
 
@@ -331,7 +346,7 @@ public class MinioService {
             log.info("创建文件夹: bucket={}, path={}", bucket, folderPath);
         } catch (Exception e) {
             log.error("创建文件夹失败: bucket={}, path={}", bucket, folderPath, e);
-            throw new RuntimeException("创建文件夹失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.folderCreateFailed", e.getMessage()), e);
         }
     }
 
@@ -419,14 +434,14 @@ public class MinioService {
             log.info("删除文件夹: bucket={}, path={}, 删除对象数={}", bucket, folderPath, objectsToDelete.size());
         } catch (Exception e) {
             log.error("删除文件夹失败: bucket={}, path={}", bucket, folderPath, e);
-            throw new RuntimeException("删除文件夹失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.folderDeleteFailed", e.getMessage()), e);
         }
     }
 
     public void uploadFile(String bucket, String objectName, InputStream stream, long size) {
         try {
             if (isPlaceholder(objectName)) {
-                throw new IllegalArgumentException("不允许上传系统保留文件名: " + PLACEHOLDER_FILE);
+                throw new IllegalArgumentException(msg("service.reservedFilename", PLACEHOLDER_FILE));
             }
 
             getClient().putObject(
@@ -442,7 +457,7 @@ public class MinioService {
             throw e;
         } catch (Exception e) {
             log.error("上传文件失败: bucket={}, object={}", bucket, objectName, e);
-            throw new RuntimeException("上传文件失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.uploadFailed", e.getMessage()), e);
         }
     }
 
@@ -456,7 +471,7 @@ public class MinioService {
             );
         } catch (Exception e) {
             log.error("下载文件失败: bucket={}, object={}", bucket, objectName, e);
-            throw new RuntimeException("下载文件失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.downloadFailed", e.getMessage()), e);
         }
     }
 
@@ -472,7 +487,7 @@ public class MinioService {
             log.info("删除文件: bucket={}, object={}", bucket, objectName);
         } catch (Exception e) {
             log.error("删除文件失败: bucket={}, object={}", bucket, objectName, e);
-            throw new RuntimeException("删除文件失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.fileDeleteFailed", e.getMessage()), e);
         }
     }
 
@@ -575,7 +590,7 @@ public class MinioService {
                 }
             } catch (Exception e) {
                 log.error("批量删除失败", e);
-                result.getErrors().add("批量删除失败: " + e.getMessage());
+                result.getErrors().add(msg("service.batchDeleteFailed", e.getMessage()));
             }
         }
 
@@ -666,7 +681,7 @@ public class MinioService {
 
         } catch (Exception e) {
             log.error("搜索失败: bucket={}, keyword={}", bucket, keyword, e);
-            throw new RuntimeException("搜索失败: " + e.getMessage(), e);
+            throw new RuntimeException(msg("service.searchFailed", e.getMessage()), e);
         }
     }
 
@@ -776,7 +791,7 @@ public class MinioService {
 
         } catch (Exception e) {
             log.error("上传文件夹失败: bucket={}, local={}", bucket, localFolder, e);
-            result.getErrors().add("上传失败: " + e.getMessage());
+            result.getErrors().add(msg("service.uploadFailed", e.getMessage()));
         }
 
         return result;
