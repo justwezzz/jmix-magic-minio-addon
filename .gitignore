@@ -54,4 +54,4 @@ $RECYCLE.BIN/
 *.lnk
 
 #Claude Code Config
-.claude/
+.claude/.worktrees/
