@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Objects;
 
 /**
  * Request object for batch upload operations.
@@ -33,6 +34,11 @@ public class UploadRequest {
      * @return a new UploadRequest
      */
     public static UploadRequest fromInputStream(String objectName, InputStream inputStream, long size) {
+        Objects.requireNonNull(objectName, "objectName must not be null");
+        Objects.requireNonNull(inputStream, "inputStream must not be null");
+        if (size < 0) {
+            throw new IllegalArgumentException("size must not be negative");
+        }
         UploadRequest request = new UploadRequest();
         request.objectName = objectName;
         request.inputStream = inputStream;
@@ -49,6 +55,14 @@ public class UploadRequest {
      * @throws IOException if the file cannot be read
      */
     public static UploadRequest fromPath(Path localPath, String objectName) throws IOException {
+        Objects.requireNonNull(localPath, "localPath must not be null");
+        Objects.requireNonNull(objectName, "objectName must not be null");
+        if (!Files.exists(localPath)) {
+            throw new IllegalArgumentException("localPath does not exist: " + localPath);
+        }
+        if (!Files.isRegularFile(localPath)) {
+            throw new IllegalArgumentException("localPath is not a regular file: " + localPath);
+        }
         UploadRequest request = new UploadRequest();
         request.objectName = objectName;
         request.path = localPath;
@@ -77,6 +91,14 @@ public class UploadRequest {
      * @throws IOException if the file cannot be read
      */
     public static UploadRequest fromFile(File file, String objectName) throws IOException {
+        Objects.requireNonNull(file, "file must not be null");
+        Objects.requireNonNull(objectName, "objectName must not be null");
+        if (!file.exists()) {
+            throw new IllegalArgumentException("file does not exist: " + file.getAbsolutePath());
+        }
+        if (!file.isFile()) {
+            throw new IllegalArgumentException("file is not a regular file: " + file.getAbsolutePath());
+        }
         UploadRequest request = new UploadRequest();
         request.objectName = objectName;
         request.file = file;
