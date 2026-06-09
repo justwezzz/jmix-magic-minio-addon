@@ -92,6 +92,9 @@ public class MinioBrowserView extends StandardView {
     @ViewComponent
     private DataGrid<MinioBucketDto> bucketDataGrid;
 
+    @ViewComponent
+    private VerticalLayout bucketPanel;
+
     private CollectionContainer<MinioBucketDto> bucketDc;
 
     @ViewComponent
@@ -140,6 +143,11 @@ public class MinioBrowserView extends StandardView {
 
         // 搜索框弹性宽度
         searchField.getStyle().set("flex-grow", "1");
+
+        // 设置 bucketPanel 的 flex 布局，使 DataGrid 占据剩余空间并独立滚动
+        bucketPanel.getStyle().set("overflow", "hidden");
+        bucketDataGrid.getStyle().set("flex-grow", "1");
+        bucketDataGrid.getStyle().set("min-height", "0");
 
         initBucketGrid();
         initFileTreeGrid();

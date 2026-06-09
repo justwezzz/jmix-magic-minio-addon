@@ -22,7 +22,7 @@
                splitterPosition="30">
 
             <!-- 左侧：Bucket 列表 -->
-            <vbox id="bucketPanel" width="100%" height="100%" padding="false" classNames="pl-xxs pr-s">
+            <vbox id="bucketPanel" width="100%" height="100%" padding="false" classNames="pl-xxs pr-s" expand="bucketDataGrid">
                 <hbox id="bucketToolbar" classNames="buttons-panel" width="100%">
                     <button id="createBucketBtn" action="createBucketAction" themeNames="primary"/>
                     <dropdownButton id="bucketMoreBtn" text="msg://minioBrowserView.more"
@@ -36,7 +36,6 @@
                 </hbox>
 
                 <dataGrid id="bucketDataGrid" width="100%" height="100%"
-                          minHeight="400px"
                           selectionMode="SINGLE" metaClass="minio_MinioBucketDto">
                     <contextMenu>
                         <item action="createBucketAction" icon="PLUS"/>
@@ -53,7 +52,7 @@
             </vbox>
 
             <!-- 右侧：文件列表 -->
-            <vbox id="filePanel" width="100%" height="100%" padding="false" classNames="pl-s">
+            <vbox id="filePanel" width="100%" height="100%" padding="false" classNames="pl-s" expand="fileTreeGrid">
                 <hbox id="fileToolbar" classNames="buttons-panel" width="100%">
                     <button id="createFolderBtn" action="createFolderAction"/>
                     <dropdownButton id="uploadBtn" text="msg://minioBrowserView.upload"
