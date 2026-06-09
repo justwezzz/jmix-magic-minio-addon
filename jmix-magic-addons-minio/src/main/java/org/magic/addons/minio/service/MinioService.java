@@ -986,6 +986,9 @@ public class MinioService {
      * @return CompletableFuture 包含批量上传结果
      */
     public CompletableFuture<BatchUploadResult> batchUpload(String bucket, List<UploadRequest> requests) {
+        if (bucket == null || bucket.isBlank()) {
+            throw new IllegalArgumentException("bucket 不能为空");
+        }
         if (requests == null || requests.isEmpty()) {
             return CompletableFuture.completedFuture(BatchUploadResult.builder()
                     .successCount(0)
@@ -1031,14 +1034,13 @@ public class MinioService {
                 .build();
 
         for (UploadRequest request : requests) {
+            InputStream stream = null;
             try {
-                InputStream stream = resolveInputStream(request);
-                long size = request.getSize();
-
-                uploadFile(bucket, request.getObjectName(), stream, size);
+                stream = resolveInputStream(request);
+                uploadFile(bucket, request.getObjectName(), stream, request.getSize());
 
                 result.setSuccessCount(result.getSuccessCount() + 1);
-                result.setTotalBytes(result.getTotalBytes() + size);
+                result.setTotalBytes(result.getTotalBytes() + request.getSize());
 
                 log.debug("批量上传成功: bucket={}, object={}", bucket, request.getObjectName());
 
@@ -1052,8 +1054,12 @@ public class MinioService {
                         .build();
                 result.getFailedFiles().add(failedFile);
             } finally {
-                // 确保关闭 InputStream
-                closeInputStreamQuietly(request);
+                if (stream != null) {
+                    try {
+                        stream.close();
+                    } catch (IOException ignored) {
+                    }
+                }
             }
         }
 
@@ -1071,15 +1077,10 @@ public class MinioService {
      * @throws IOException 如果无法创建输入流
      */
     private InputStream resolveInputStream(UploadRequest request) throws IOException {
-        // 如果已有 InputStream 且可用，直接返回
+        // 如果已有 InputStream，直接返回
         InputStream existing = request.getInputStream();
         if (existing != null) {
-            try {
-                // 检查流是否可用（非空检查）
-                return existing;
-            } catch (Exception e) {
-                // 流可能已关闭或无效，尝试重新创建
-            }
+            return existing;
         }
 
         // 尝试从 Path 创建
@@ -1093,22 +1094,6 @@ public class MinioService {
         }
 
         throw new IOException("无法解析上传请求的输入流: " + request.getObjectName());
-    }
-
-    /**
-     * 安静地关闭上传请求中的输入流。
-     *
-     * @param request 上传请求
-     */
-    private void closeInputStreamQuietly(UploadRequest request) {
-        try {
-            InputStream stream = request.getInputStream();
-            if (stream != null) {
-                stream.close();
-            }
-        } catch (IOException e) {
-            log.debug("关闭输入流失败: objectName={}, error={}", request.getObjectName(), e.getMessage());
-        }
     }
 
     /**
