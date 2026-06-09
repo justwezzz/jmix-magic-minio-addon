@@ -116,12 +116,38 @@ public class MinioProperties {
          */
         private String maxSize = "50MB";
 
+        /**
+         * 批量上传线程池大小
+         */
+        private int threadPoolSize = 10;
+
+        /**
+         * 批量上传批次大小
+         */
+        private int batchSize = 50;
+
         public String getMaxSize() {
             return maxSize;
         }
 
         public void setMaxSize(String maxSize) {
             this.maxSize = maxSize;
+        }
+
+        public int getThreadPoolSize() {
+            return threadPoolSize;
+        }
+
+        public void setThreadPoolSize(int threadPoolSize) {
+            this.threadPoolSize = threadPoolSize;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
         }
     }
 }
