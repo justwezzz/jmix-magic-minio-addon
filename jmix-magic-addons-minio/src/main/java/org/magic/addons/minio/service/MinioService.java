@@ -987,7 +987,7 @@ public class MinioService {
      */
     public CompletableFuture<BatchUploadResult> batchUpload(String bucket, List<UploadRequest> requests) {
         if (bucket == null || bucket.isBlank()) {
-            throw new IllegalArgumentException("bucket 不能为空");
+            throw new IllegalArgumentException(msg("service.bucketRequired"));
         }
         if (requests == null || requests.isEmpty()) {
             return CompletableFuture.completedFuture(BatchUploadResult.builder()

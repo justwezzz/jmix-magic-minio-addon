@@ -5,6 +5,7 @@ import io.jmix.core.impl.scanning.AnnotationScanMetadataReaderFactory;
 import io.jmix.flowui.FlowuiConfiguration;
 import io.jmix.flowui.sys.ViewControllersConfiguration;
 import io.jmix.security.SecurityConfiguration;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -26,6 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 @JmixModule(dependsOn = {FlowuiConfiguration.class, SecurityConfiguration.class})
 @PropertySource(name = "org.magic.addons.minio", value = "classpath:/org/magic/addons/minio/module.properties")
 public class MinioConfiguration {
+
+    private ExecutorService uploadThreadPool;
 
     @Bean("minio_ViewControllers")
     public ViewControllersConfiguration viewControllersConfiguration(
@@ -52,6 +55,17 @@ public class MinioConfiguration {
             return thread;
         };
 
-        return Executors.newFixedThreadPool(threadPoolSize, threadFactory);
+        this.uploadThreadPool = Executors.newFixedThreadPool(threadPoolSize, threadFactory);
+        return this.uploadThreadPool;
+    }
+
+    /**
+     * 应用关闭时优雅关闭线程池
+     */
+    @PreDestroy
+    public void shutdown() {
+        if (uploadThreadPool != null) {
+            uploadThreadPool.shutdown();
+        }
     }
 }

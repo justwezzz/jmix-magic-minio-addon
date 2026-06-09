@@ -139,6 +139,9 @@ public class MinioProperties {
         }
 
         public void setThreadPoolSize(int threadPoolSize) {
+            if (threadPoolSize <= 0) {
+                throw new IllegalArgumentException("threadPoolSize must be greater than 0, got: " + threadPoolSize);
+            }
             this.threadPoolSize = threadPoolSize;
         }
 
@@ -147,6 +150,9 @@ public class MinioProperties {
         }
 
         public void setBatchSize(int batchSize) {
+            if (batchSize <= 0) {
+                throw new IllegalArgumentException("batchSize must be greater than 0, got: " + batchSize);
+            }
             this.batchSize = batchSize;
         }
     }
