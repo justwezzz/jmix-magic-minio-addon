@@ -13,4 +13,11 @@ dependencies {
     api 'io.minio:minio:8.5.10'
 
     implementation 'org.springframework.boot:spring-boot-autoconfigure'
+
+    // Test dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.mockito:mockito-core'
+    testImplementation 'org.mockito:mockito-junit-jupiter'
+    testImplementation 'org.assertj:assertj-core'
 }
