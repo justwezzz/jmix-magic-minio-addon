@@ -9,10 +9,12 @@ import io.minio.messages.DeleteObject;
 import io.minio.messages.Item;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +23,8 @@ import java.time.ZoneId;
 import java.util.*;
 import java.util.Base64;
 import java.util.Iterator;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -35,6 +39,7 @@ public class MinioService {
 
     private final MinioProperties minioProperties;
     private final Messages messages;
+    private final ExecutorService uploadThreadPool;
 
     // 缓存的 MinioClient 实例（懒重建：参数变化时才重建）
     private volatile MinioClient cachedClient;
@@ -42,9 +47,11 @@ public class MinioService {
     private volatile String cachedAccessKey;
     private volatile String cachedSecretKey;
 
-    public MinioService(MinioProperties minioProperties, Messages messages) {
+    public MinioService(MinioProperties minioProperties, Messages messages,
+                        @Qualifier("minio_uploadThreadPool") ExecutorService uploadThreadPool) {
         this.minioProperties = minioProperties;
         this.messages = messages;
+        this.uploadThreadPool = uploadThreadPool;
     }
 
     private String msg(String key) {
@@ -964,5 +971,163 @@ public class MinioService {
                 }
             }
         }
+    }
+
+    // ==================== 批量上传 ====================
+
+    /**
+     * 批量上传文件到 MinIO。
+     * <p>
+     * 将请求按批次大小分片，每个批次作为一个异步任务提交到线程池并行执行。
+     * 单个文件上传失败不会影响其他文件的上传。
+     *
+     * @param bucket 目标 Bucket 名称
+     * @param requests 上传请求列表
+     * @return CompletableFuture 包含批量上传结果
+     */
+    public CompletableFuture<BatchUploadResult> batchUpload(String bucket, List<UploadRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            return CompletableFuture.completedFuture(BatchUploadResult.builder()
+                    .successCount(0)
+                    .totalBytes(0)
+                    .failedFiles(new ArrayList<>())
+                    .build());
+        }
+
+        int batchSize = minioProperties.getUpload().getBatchSize();
+        List<List<UploadRequest>> batches = partition(requests, batchSize);
+
+        log.info("批量上传开始: bucket={}, 总文件数={}, 批次数={}", bucket, requests.size(), batches.size());
+
+        // 为每个批次创建异步任务
+        List<CompletableFuture<BatchUploadResult>> batchFutures = batches.stream()
+                .map(batch -> CompletableFuture.supplyAsync(
+                        () -> uploadBatch(bucket, batch),
+                        uploadThreadPool
+                ))
+                .collect(Collectors.toList());
+
+        // 等待所有批次完成并合并结果
+        return CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> batchFutures.stream()
+                        .map(CompletableFuture::join)
+                        .reduce(new BatchUploadResult(), BatchUploadResult::merge));
+    }
+
+    /**
+     * 处理单个批次的上传（在线程池中执行）。
+     * <p>
+     * 批次内的文件顺序上传，失败时记录错误并继续处理下一个文件。
+     *
+     * @param bucket 目标 Bucket
+     * @param requests 本批次的请求列表
+     * @return 本批次的上传结果
+     */
+    private BatchUploadResult uploadBatch(String bucket, List<UploadRequest> requests) {
+        BatchUploadResult result = BatchUploadResult.builder()
+                .successCount(0)
+                .totalBytes(0)
+                .failedFiles(new ArrayList<>())
+                .build();
+
+        for (UploadRequest request : requests) {
+            try {
+                InputStream stream = resolveInputStream(request);
+                long size = request.getSize();
+
+                uploadFile(bucket, request.getObjectName(), stream, size);
+
+                result.setSuccessCount(result.getSuccessCount() + 1);
+                result.setTotalBytes(result.getTotalBytes() + size);
+
+                log.debug("批量上传成功: bucket={}, object={}", bucket, request.getObjectName());
+
+            } catch (Exception e) {
+                log.warn("批量上传失败: bucket={}, object={}, error={}",
+                        bucket, request.getObjectName(), e.getMessage());
+
+                FailedFile failedFile = FailedFile.builder()
+                        .objectName(request.getObjectName())
+                        .errorMessage(e.getMessage())
+                        .build();
+                result.getFailedFiles().add(failedFile);
+            } finally {
+                // 确保关闭 InputStream
+                closeInputStreamQuietly(request);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 解析上传请求的输入流。
+     * <p>
+     * 对于 Path 和 File 类型的请求，会创建新的 InputStream。
+     * 对于已经包含 InputStream 的请求，直接返回。
+     *
+     * @param request 上传请求
+     * @return 输入流
+     * @throws IOException 如果无法创建输入流
+     */
+    private InputStream resolveInputStream(UploadRequest request) throws IOException {
+        // 如果已有 InputStream 且可用，直接返回
+        InputStream existing = request.getInputStream();
+        if (existing != null) {
+            try {
+                // 检查流是否可用（非空检查）
+                return existing;
+            } catch (Exception e) {
+                // 流可能已关闭或无效，尝试重新创建
+            }
+        }
+
+        // 尝试从 Path 创建
+        if (request.getPath() != null) {
+            return Files.newInputStream(request.getPath());
+        }
+
+        // 尝试从 File 创建
+        if (request.getFile() != null) {
+            return new java.io.FileInputStream(request.getFile());
+        }
+
+        throw new IOException("无法解析上传请求的输入流: " + request.getObjectName());
+    }
+
+    /**
+     * 安静地关闭上传请求中的输入流。
+     *
+     * @param request 上传请求
+     */
+    private void closeInputStreamQuietly(UploadRequest request) {
+        try {
+            InputStream stream = request.getInputStream();
+            if (stream != null) {
+                stream.close();
+            }
+        } catch (IOException e) {
+            log.debug("关闭输入流失败: objectName={}, error={}", request.getObjectName(), e.getMessage());
+        }
+    }
+
+    /**
+     * 将列表按指定大小分片。
+     *
+     * @param list 原始列表
+     * @param size 每片大小
+     * @param <T> 元素类型
+     * @return 分片后的列表
+     */
+    private <T> List<List<T>> partition(List<T> list, int size) {
+        if (size <= 0) {
+            throw new IllegalArgumentException("分片大小必须大于 0");
+        }
+
+        List<List<T>> partitions = new ArrayList<>();
+        for (int i = 0; i < list.size(); i += size) {
+            partitions.add(list.subList(i, Math.min(i + size, list.size())));
+        }
+        return partitions;
     }
 }
