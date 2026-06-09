@@ -1,5 +1,8 @@
 package org.magic.addons.minio.dto;
 
+/**
+ * 上传失败的文件信息。
+ */
 public class FailedFile {
 
     private String objectName;

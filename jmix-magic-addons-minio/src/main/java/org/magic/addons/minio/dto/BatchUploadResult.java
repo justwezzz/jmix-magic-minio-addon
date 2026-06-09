@@ -3,6 +3,9 @@ package org.magic.addons.minio.dto;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 批量上传结果。
+ */
 public class BatchUploadResult {
 
     private int successCount;
@@ -38,11 +41,11 @@ public class BatchUploadResult {
     }
 
     /**
-     * Merges another BatchUploadResult into this one.
-     * Combines success counts, total bytes, and failed files lists.
+     * 合并另一个批量上传结果到当前结果。
+     * 合并成功数量、总字节数和失败文件列表。
      *
-     * @param other the other BatchUploadResult to merge
-     * @return this BatchUploadResult with combined values
+     * @param other 要合并的另一个结果
+     * @return 合并后的当前结果
      */
     public BatchUploadResult merge(BatchUploadResult other) {
         if (other != null) {

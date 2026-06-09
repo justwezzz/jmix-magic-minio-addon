@@ -1000,7 +1000,7 @@ public class MinioService {
         int batchSize = minioProperties.getUpload().getBatchSize();
         List<List<UploadRequest>> batches = partition(requests, batchSize);
 
-        log.info("批量上传开始: bucket={}, 总文件数={}, 批次数={}", bucket, requests.size(), batches.size());
+        log.info(msg("service.batchUploadStart"), bucket, requests.size(), batches.size());
 
         // 为每个批次创建异步任务
         List<CompletableFuture<BatchUploadResult>> batchFutures = batches.stream()
@@ -1042,11 +1042,10 @@ public class MinioService {
                 result.setSuccessCount(result.getSuccessCount() + 1);
                 result.setTotalBytes(result.getTotalBytes() + request.getSize());
 
-                log.debug("批量上传成功: bucket={}, object={}", bucket, request.getObjectName());
+                log.debug(msg("service.batchUploadSuccess"), bucket, request.getObjectName());
 
             } catch (Exception e) {
-                log.warn("批量上传失败: bucket={}, object={}, error={}",
-                        bucket, request.getObjectName(), e.getMessage());
+                log.warn(msg("service.batchUploadFileFailed"), bucket, request.getObjectName(), e.getMessage());
 
                 FailedFile failedFile = FailedFile.builder()
                         .objectName(request.getObjectName())
@@ -1093,7 +1092,7 @@ public class MinioService {
             return new java.io.FileInputStream(request.getFile());
         }
 
-        throw new IOException("无法解析上传请求的输入流: " + request.getObjectName());
+        throw new IOException(msg("service.resolveInputStreamFailed", request.getObjectName()));
     }
 
     /**
