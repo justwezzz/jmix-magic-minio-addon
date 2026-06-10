@@ -55,11 +55,11 @@ public class MinioService {
     }
 
     private String msg(String key) {
-        return messages.getMessage(MSG_PREFIX + key);
+        return messages.getMessage(MSG_PREFIX + key, Locale.getDefault());
     }
 
     private String msg(String key, Object... args) {
-        return String.format(messages.getMessage(MSG_PREFIX + key), args);
+        return String.format(messages.getMessage(MSG_PREFIX + key, Locale.getDefault()), args);
     }
 
     /**
