@@ -25,6 +25,7 @@ import java.util.Base64;
 import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -976,16 +977,17 @@ public class MinioService {
     // ==================== 批量上传 ====================
 
     /**
-     * 批量上传文件到 MinIO。
+     * 异步批量上传文件到 MinIO。
      * <p>
-     * 将请求按批次大小分片，每个批次作为一个异步任务提交到线程池并行执行。
+     * 使用共享线程池，线程数由配置决定（默认 CPU核数 × 2）。
+     * 每个文件作为独立任务提交，线程池自动调度执行。
      * 单个文件上传失败不会影响其他文件的上传。
      *
      * @param bucket 目标 Bucket 名称
      * @param requests 上传请求列表
      * @return CompletableFuture 包含批量上传结果
      */
-    public CompletableFuture<BatchUploadResult> batchUpload(String bucket, List<UploadRequest> requests) {
+    public CompletableFuture<BatchUploadResult> batchUploadAsync(String bucket, List<UploadRequest> requests) {
         if (bucket == null || bucket.isBlank()) {
             throw new IllegalArgumentException(msg("service.bucketRequired"));
         }
@@ -997,72 +999,118 @@ public class MinioService {
                     .build());
         }
 
-        int batchSize = minioProperties.getUpload().getBatchSize();
-        List<List<UploadRequest>> batches = partition(requests, batchSize);
+        log.info(msg("service.batchUploadStart"), bucket, requests.size(), requests.size());
 
-        log.info(msg("service.batchUploadStart"), bucket, requests.size(), batches.size());
-
-        // 为每个批次创建异步任务
-        List<CompletableFuture<BatchUploadResult>> batchFutures = batches.stream()
-                .map(batch -> CompletableFuture.supplyAsync(
-                        () -> uploadBatch(bucket, batch),
+        // 为每个文件创建独立的异步任务
+        List<CompletableFuture<BatchUploadResult>> futures = requests.stream()
+                .map(req -> CompletableFuture.supplyAsync(
+                        () -> uploadSingle(bucket, req),
                         uploadThreadPool
                 ))
                 .collect(Collectors.toList());
 
-        // 等待所有批次完成并合并结果
-        return CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0]))
-                .thenApply(v -> batchFutures.stream()
-                        .map(CompletableFuture::join)
-                        .reduce(new BatchUploadResult(), BatchUploadResult::merge));
+        return mergeResults(futures);
     }
 
     /**
-     * 处理单个批次的上传（在线程池中执行）。
+     * 批量上传文件到 MinIO，使用临时线程池。
      * <p>
-     * 批次内的文件顺序上传，失败时记录错误并继续处理下一个文件。
+     * 创建指定大小的临时线程池执行上传任务，
+     * 线程池在上传完成后自动关闭。
+     * 单个文件上传失败不会影响其他文件的上传。
+     *
+     * @param bucket 目标 Bucket 名称
+     * @param requests 上传请求列表
+     * @param threadCount 线程数（必须大于 0）
+     * @return CompletableFuture 包含批量上传结果
+     */
+    public CompletableFuture<BatchUploadResult> batchUpload(
+            String bucket, List<UploadRequest> requests, int threadCount) {
+        if (bucket == null || bucket.isBlank()) {
+            throw new IllegalArgumentException(msg("service.bucketRequired"));
+        }
+        if (threadCount <= 0) {
+            throw new IllegalArgumentException("threadCount must be greater than 0, got: " + threadCount);
+        }
+        if (requests == null || requests.isEmpty()) {
+            return CompletableFuture.completedFuture(BatchUploadResult.builder()
+                    .successCount(0)
+                    .totalBytes(0)
+                    .failedFiles(new ArrayList<>())
+                    .build());
+        }
+
+        log.info("批量上传开始: bucket={}, 文件数={}, 线程数={}", bucket, requests.size(), threadCount);
+
+        ExecutorService tempPool = Executors.newFixedThreadPool(threadCount);
+
+        List<CompletableFuture<BatchUploadResult>> futures = requests.stream()
+                .map(req -> CompletableFuture.supplyAsync(
+                        () -> uploadSingle(bucket, req),
+                        tempPool
+                ))
+                .collect(Collectors.toList());
+
+        return mergeResults(futures)
+                .whenComplete((result, ex) -> tempPool.shutdown());
+    }
+
+    /**
+     * 上传单个文件（在线程池中执行）。
      *
      * @param bucket 目标 Bucket
-     * @param requests 本批次的请求列表
-     * @return 本批次的上传结果
+     * @param request 上传请求
+     * @return 上传结果（成功或失败）
      */
-    private BatchUploadResult uploadBatch(String bucket, List<UploadRequest> requests) {
+    private BatchUploadResult uploadSingle(String bucket, UploadRequest request) {
         BatchUploadResult result = BatchUploadResult.builder()
                 .successCount(0)
                 .totalBytes(0)
                 .failedFiles(new ArrayList<>())
                 .build();
 
-        for (UploadRequest request : requests) {
-            InputStream stream = null;
-            try {
-                stream = resolveInputStream(request);
-                uploadFile(bucket, request.getObjectName(), stream, request.getSize());
+        InputStream stream = null;
+        try {
+            stream = resolveInputStream(request);
+            uploadFile(bucket, request.getObjectName(), stream, request.getSize());
 
-                result.setSuccessCount(result.getSuccessCount() + 1);
-                result.setTotalBytes(result.getTotalBytes() + request.getSize());
+            result.setSuccessCount(1);
+            result.setTotalBytes(request.getSize());
 
-                log.debug(msg("service.batchUploadSuccess"), bucket, request.getObjectName());
+            log.debug(msg("service.batchUploadSuccess"), bucket, request.getObjectName());
 
-            } catch (Exception e) {
-                log.warn(msg("service.batchUploadFileFailed"), bucket, request.getObjectName(), e.getMessage());
+        } catch (Exception e) {
+            log.warn(msg("service.batchUploadFileFailed"), bucket, request.getObjectName(), e.getMessage());
 
-                FailedFile failedFile = FailedFile.builder()
-                        .objectName(request.getObjectName())
-                        .errorMessage(e.getMessage())
-                        .build();
-                result.getFailedFiles().add(failedFile);
-            } finally {
-                if (stream != null) {
-                    try {
-                        stream.close();
-                    } catch (IOException ignored) {
-                    }
+            FailedFile failedFile = FailedFile.builder()
+                    .objectName(request.getObjectName())
+                    .errorMessage(e.getMessage())
+                    .build();
+            result.getFailedFiles().add(failedFile);
+        } finally {
+            if (stream != null) {
+                try {
+                    stream.close();
+                } catch (IOException ignored) {
                 }
             }
         }
 
         return result;
+    }
+
+    /**
+     * 合并多个异步上传结果。
+     *
+     * @param futures 异步任务列表
+     * @return 合并后的结果
+     */
+    private CompletableFuture<BatchUploadResult> mergeResults(
+            List<CompletableFuture<BatchUploadResult>> futures) {
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> futures.stream()
+                        .map(CompletableFuture::join)
+                        .reduce(new BatchUploadResult(), BatchUploadResult::merge));
     }
 
     /**
@@ -1093,25 +1141,5 @@ public class MinioService {
         }
 
         throw new IOException(msg("service.resolveInputStreamFailed", request.getObjectName()));
-    }
-
-    /**
-     * 将列表按指定大小分片。
-     *
-     * @param list 原始列表
-     * @param size 每片大小
-     * @param <T> 元素类型
-     * @return 分片后的列表
-     */
-    private <T> List<List<T>> partition(List<T> list, int size) {
-        if (size <= 0) {
-            throw new IllegalArgumentException("分片大小必须大于 0");
-        }
-
-        List<List<T>> partitions = new ArrayList<>();
-        for (int i = 0; i < list.size(); i += size) {
-            partitions.add(list.subList(i, Math.min(i + size, list.size())));
-        }
-        return partitions;
     }
 }
