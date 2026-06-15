@@ -4,6 +4,8 @@ import io.jmix.core.Messages;
 import org.magic.addons.minio.MinioProperties;
 import org.magic.addons.minio.dto.*;
 import io.minio.*;
+import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.http.Method;
 import io.minio.messages.DeleteError;
 import io.minio.messages.DeleteObject;
 import io.minio.messages.Item;
@@ -16,6 +18,7 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -26,6 +29,7 @@ import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -146,6 +150,46 @@ public class MinioService {
             return String.format("%.1f MB", bytes / (1024.0 * 1024));
         }
         return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    /**
+     * 生成预签名 URL（用于图片/视频预览）。
+     *
+     * @param bucket        Bucket 名称
+     * @param objectPath    对象路径
+     * @param expirySeconds 过期时间（秒）
+     * @return 预签名 URL
+     */
+    public String getPresignedUrl(String bucket, String objectPath, int expirySeconds) {
+        try {
+            return getClient().getPresignedObjectUrl(
+                    GetPresignedObjectUrlArgs.builder()
+                            .bucket(bucket)
+                            .object(objectPath)
+                            .method(Method.GET)
+                            .expiry(expirySeconds, TimeUnit.SECONDS)
+                            .build()
+            );
+        } catch (Exception e) {
+            log.error("生成预签名 URL 失败: bucket={}, path={}", bucket, objectPath, e);
+            throw new RuntimeException(msg("service.presignedUrlFailed"), e);
+        }
+    }
+
+    /**
+     * 读取文本文件内容。
+     *
+     * @param bucket     Bucket 名称
+     * @param objectPath 对象路径
+     * @return 文本内容
+     */
+    public String readTextContent(String bucket, String objectPath) {
+        try (InputStream stream = downloadFile(bucket, objectPath)) {
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.error("读取文本内容失败: bucket={}, path={}", bucket, objectPath, e);
+            throw new RuntimeException(msg("service.readTextFailed"), e);
+        }
     }
 
     // ==================== Bucket 操作 ====================
