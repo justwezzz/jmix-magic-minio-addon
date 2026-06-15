@@ -117,14 +117,10 @@ public class MinioProperties {
         private String maxSize = "50MB";
 
         /**
-         * 批量上传线程池大小
+         * 批量上传线程池大小。
+         * null 表示使用默认值（CPU核数 × 2）。
          */
-        private int threadPoolSize = 10;
-
-        /**
-         * 批量上传批次大小
-         */
-        private int batchSize = 50;
+        private Integer threadPoolSize;
 
         public String getMaxSize() {
             return maxSize;
@@ -135,25 +131,14 @@ public class MinioProperties {
         }
 
         public int getThreadPoolSize() {
-            return threadPoolSize;
+            return threadPoolSize != null ? threadPoolSize : Runtime.getRuntime().availableProcessors() * 2;
         }
 
-        public void setThreadPoolSize(int threadPoolSize) {
-            if (threadPoolSize <= 0) {
+        public void setThreadPoolSize(Integer threadPoolSize) {
+            if (threadPoolSize != null && threadPoolSize <= 0) {
                 throw new IllegalArgumentException("threadPoolSize must be greater than 0, got: " + threadPoolSize);
             }
             this.threadPoolSize = threadPoolSize;
-        }
-
-        public int getBatchSize() {
-            return batchSize;
-        }
-
-        public void setBatchSize(int batchSize) {
-            if (batchSize <= 0) {
-                throw new IllegalArgumentException("batchSize must be greater than 0, got: " + batchSize);
-            }
-            this.batchSize = batchSize;
         }
     }
 }
