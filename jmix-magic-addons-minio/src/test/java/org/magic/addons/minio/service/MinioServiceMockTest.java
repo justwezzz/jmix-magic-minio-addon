@@ -34,6 +34,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.lang.reflect.Field;
 import java.time.ZonedDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,6 +67,15 @@ class MinioServiceMockTest {
     void setUp() throws Exception {
         lenient().when(properties.getUpload()).thenReturn(uploadProperties);
         // batchSize 已从 Upload 配置中移除
+
+        // 使用 Answer 动态返回带占位符的消息，修复 String.format NPE 问题
+        lenient().when(messages.getMessage(anyString(), any(Locale.class))).thenAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            if (key.contains("bucketNameExists")) return "Bucket already exists: %s";
+            if (key.contains("reservedFilename")) return "Reserved filename: %s";
+            if (key.contains("threadCountInvalid")) return "Thread count must be greater than 0, got: %d";
+            return "mock message";
+        });
         lenient().when(messages.getMessage(anyString())).thenReturn("mock message");
 
         // Mock MinioProperties 的连接配置，与 injectMockClient 中的缓存值一致
@@ -401,11 +411,11 @@ class MinioServiceMockTest {
         // when & then
         assertThatThrownBy(() -> service.batchUpload("test-bucket", List.of(), 0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("threadCount must be greater than 0");
+                .hasMessageContaining("Thread count must be greater than 0");
 
         assertThatThrownBy(() -> service.batchUpload("test-bucket", List.of(), -1))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("threadCount must be greater than 0");
+                .hasMessageContaining("Thread count must be greater than 0");
     }
 
     @Test
