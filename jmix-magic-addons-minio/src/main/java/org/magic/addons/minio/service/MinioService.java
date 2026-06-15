@@ -153,21 +153,23 @@ public class MinioService {
     }
 
     /**
-     * 生成预签名 URL（用于图片/视频预览）。
+     * 生成预签名 URL（用于浏览器预览）。
      *
      * @param bucket        Bucket 名称
      * @param objectPath    对象路径
      * @param expirySeconds 过期时间（秒）
-     * @return 预签名 URL
+     * @return 预签名 URL（带 inline disposition，浏览器预览而非下载）
      */
     public String getPresignedUrl(String bucket, String objectPath, int expirySeconds) {
         try {
+            // 设置 response-content-disposition=inline 让浏览器预览而非下载
             return getClient().getPresignedObjectUrl(
                     GetPresignedObjectUrlArgs.builder()
                             .bucket(bucket)
                             .object(objectPath)
                             .method(Method.GET)
                             .expiry(expirySeconds, TimeUnit.SECONDS)
+                            .extraQueryParams(Map.of("response-content-disposition", "inline"))
                             .build()
             );
         } catch (Exception e) {
