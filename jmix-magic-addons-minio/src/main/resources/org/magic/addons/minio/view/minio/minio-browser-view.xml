@@ -79,7 +79,7 @@
                 <treeDataGrid id="fileTreeGrid" width="100%" height="100%"
                               selectionMode="MULTI" metaClass="minio_MinioTreeNode"
                               hierarchyProperty="parent">
-                    <contextMenu>
+                    <contextMenu id="fileTreeGridContextMenu">
                         <item action="createFolderAction" icon="FOLDER_ADD"/>
                         <item action="uploadFileAction" icon="FILE_ADD"/>
                         <item action="uploadFolderAction" icon="FOLDER_ADD"/>

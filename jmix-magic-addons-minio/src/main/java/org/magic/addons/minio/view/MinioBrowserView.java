@@ -101,6 +101,9 @@ public class MinioBrowserView extends StandardView {
     @Autowired
     private io.jmix.core.Messages messages;
 
+    @Autowired
+    private io.jmix.flowui.UiComponents uiComponents;
+
     @ViewComponent
     private MessageBundle messageBundle;
 
@@ -789,8 +792,8 @@ public class MinioBrowserView extends StandardView {
                 .set("z-index", "1");
         closeBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_TERTIARY);
 
-        // CodeEditor
-        CodeEditor codeEditor = new CodeEditor();
+        // 使用 UiComponents 创建 CodeEditor（确保正确初始化）
+        CodeEditor codeEditor = uiComponents.create(CodeEditor.class);
         codeEditor.setWidthFull();
         codeEditor.setHeight("300px");
         codeEditor.setMode(detectLanguage(getFileExtension(node.getName())));
@@ -815,6 +818,12 @@ public class MinioBrowserView extends StandardView {
         });
 
         layout.add(closeBtn, codeEditor);
+
+        // 使用 JavaScript 阻止 Vaadin Grid contextMenu，保留浏览器默认菜单
+        layout.getElement().executeJs(
+            "this.addEventListener('contextmenu', e => { e.stopPropagation(); }, true);"
+        );
+
         return layout;
     }
 
@@ -827,6 +836,7 @@ public class MinioBrowserView extends StandardView {
         layout.setPadding(true);
         layout.setSpacing(false);
         layout.getStyle().set("position", "relative");
+        layout.setAlignItems(com.vaadin.flow.component.orderedlayout.FlexComponent.Alignment.CENTER);
 
         // 关闭按钮
         Button closeBtn = new Button("×", e -> fileTreeGrid.setDetailsVisible(node, false));
@@ -847,6 +857,12 @@ public class MinioBrowserView extends StandardView {
         image.setSrc(presignedUrl);
 
         layout.add(closeBtn, image);
+
+        // 使用 JavaScript 阻止 Vaadin Grid contextMenu，保留浏览器默认菜单
+        layout.getElement().executeJs(
+            "this.addEventListener('contextmenu', e => { e.stopPropagation(); }, true);"
+        );
+
         return layout;
     }
 
@@ -881,6 +897,12 @@ public class MinioBrowserView extends StandardView {
         ));
 
         layout.add(closeBtn, video);
+
+        // 使用 JavaScript 阻止 Vaadin Grid contextMenu，保留浏览器默认菜单
+        layout.getElement().executeJs(
+            "this.addEventListener('contextmenu', e => { e.stopPropagation(); }, true);"
+        );
+
         return layout;
     }
 
@@ -992,11 +1014,12 @@ public class MinioBrowserView extends StandardView {
     /**
      * 右键菜单动态内容处理 - 控制菜单项显示。
      * 只有右键点击文件夹时才显示"选中目录下所有文件"菜单。
+     * 当右键点击预览区域（item为null）时隐藏整个菜单。
      */
-    @Install(to = "fileTreeGrid.contextMenu", subject = "dynamicContentHandler")
+    @Install(to = "fileTreeGridContextMenu", subject = "dynamicContentHandler")
     private boolean fileTreeGridContextMenuDynamicContentHandler(MinioTreeNode item) {
         if (item == null) {
-            return true;
+            return false;  // 预览区域不显示右键菜单
         }
         // 记录右键目标
         if (item.getType() == NodeType.FOLDER) {
