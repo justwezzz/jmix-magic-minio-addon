@@ -41,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -68,14 +69,8 @@ class MinioServiceMockTest {
         lenient().when(properties.getUpload()).thenReturn(uploadProperties);
         // batchSize 已从 Upload 配置中移除
 
-        // 使用 Answer 动态返回带占位符的消息，修复 String.format NPE 问题
-        lenient().when(messages.getMessage(anyString(), any(Locale.class))).thenAnswer(invocation -> {
-            String key = invocation.getArgument(0);
-            if (key.contains("bucketNameExists")) return "Bucket already exists: %s";
-            if (key.contains("reservedFilename")) return "Reserved filename: %s";
-            if (key.contains("threadCountInvalid")) return "Thread count must be greater than 0, got: %d";
-            return "mock message";
-        });
+        // 简化 mock：返回带占位符的通用消息，避免 String.format NPE
+        lenient().when(messages.getMessage(anyString(), any(Locale.class))).thenReturn("mock message: %s");
         lenient().when(messages.getMessage(anyString())).thenReturn("mock message");
 
         // Mock MinioProperties 的连接配置，与 injectMockClient 中的缓存值一致
@@ -163,6 +158,9 @@ class MinioServiceMockTest {
         // when & then
         assertThatThrownBy(() -> service.createBucket("existing-bucket"))
                 .isInstanceOf(IllegalArgumentException.class);
+
+        // 验证使用了正确的消息键
+        verify(messages).getMessage(eq("org.magic.addons.minio/service.bucketNameExists"), any(Locale.class));
     }
 
     // ==================== bucketExists tests ====================
@@ -233,6 +231,9 @@ class MinioServiceMockTest {
         InputStream stream = new ByteArrayInputStream(new byte[0]);
         assertThatThrownBy(() -> service.uploadFile("bucket", "folder/.minio_placeholder", stream, 0))
                 .isInstanceOf(IllegalArgumentException.class);
+
+        // 验证使用了正确的消息键
+        verify(messages).getMessage(eq("org.magic.addons.minio/service.reservedFilename"), any(Locale.class));
     }
 
     // ==================== downloadFile tests ====================
@@ -410,12 +411,17 @@ class MinioServiceMockTest {
     void batchUpload_shouldThrowException_forInvalidThreadCount() {
         // when & then
         assertThatThrownBy(() -> service.batchUpload("test-bucket", List.of(), 0))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Thread count must be greater than 0");
+                .isInstanceOf(IllegalArgumentException.class);
+        // 验证使用了正确的消息键
+        verify(messages).getMessage(eq("org.magic.addons.minio/service.threadCountInvalid"), any(Locale.class));
+
+        // 重置 mock 以便第二次测试
+        reset(messages);
+        lenient().when(messages.getMessage(anyString(), any(Locale.class))).thenReturn("mock message: %s");
 
         assertThatThrownBy(() -> service.batchUpload("test-bucket", List.of(), -1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Thread count must be greater than 0");
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(messages).getMessage(eq("org.magic.addons.minio/service.threadCountInvalid"), any(Locale.class));
     }
 
     @Test
