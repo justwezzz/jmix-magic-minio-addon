@@ -158,24 +158,89 @@ public class MinioService {
      * @param bucket        Bucket 名称
      * @param objectPath    对象路径
      * @param expirySeconds 过期时间（秒）
-     * @return 预签名 URL（带 inline disposition，浏览器预览而非下载）
+     * @return 预签名 URL（带正确的 Content-Type 和 inline disposition）
      */
     public String getPresignedUrl(String bucket, String objectPath, int expirySeconds) {
         try {
-            // 设置 response-content-disposition=inline 让浏览器预览而非下载
+            // 获取文件的 Content-Type
+            String contentType = detectContentType(objectPath);
+
+            // 设置响应头参数，让浏览器预览而非下载
+            Map<String, String> reqParams = new HashMap<>();
+            reqParams.put("response-content-type", contentType);
+            reqParams.put("response-content-disposition", "inline");
+
             return getClient().getPresignedObjectUrl(
                     GetPresignedObjectUrlArgs.builder()
                             .bucket(bucket)
                             .object(objectPath)
                             .method(Method.GET)
                             .expiry(expirySeconds, TimeUnit.SECONDS)
-                            .extraQueryParams(Map.of("response-content-disposition", "inline"))
+                            .extraQueryParams(reqParams)
                             .build()
             );
         } catch (Exception e) {
             log.error("生成预签名 URL 失败: bucket={}, path={}", bucket, objectPath, e);
             throw new RuntimeException(msg("service.presignedUrlFailed"), e);
         }
+    }
+
+    /**
+     * 根据文件扩展名检测 Content-Type。
+     */
+    private String detectContentType(String objectPath) {
+        String extension = getFileExtension(objectPath).toLowerCase();
+        return switch (extension) {
+            // 文档类型
+            case "pdf" -> "application/pdf";
+            case "doc" -> "application/msword";
+            case "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            case "xls" -> "application/vnd.ms-excel";
+            case "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            case "ppt" -> "application/vnd.ms-powerpoint";
+            case "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+            // 图片类型
+            case "jpg", "jpeg" -> "image/jpeg";
+            case "png" -> "image/png";
+            case "gif" -> "image/gif";
+            case "bmp" -> "image/bmp";
+            case "svg" -> "image/svg+xml";
+            case "webp" -> "image/webp";
+            case "ico" -> "image/x-icon";
+            // 音频类型
+            case "mp3" -> "audio/mpeg";
+            case "wav" -> "audio/wav";
+            case "ogg" -> "audio/ogg";
+            case "aac" -> "audio/aac";
+            // 视频类型
+            case "mp4" -> "video/mp4";
+            case "webm" -> "video/webm";
+            case "ogv" -> "video/ogg";
+            // 文本类型
+            case "txt" -> "text/plain";
+            case "html", "htm" -> "text/html";
+            case "css" -> "text/css";
+            case "js" -> "application/javascript";
+            case "json" -> "application/json";
+            case "xml" -> "application/xml";
+            case "csv" -> "text/csv";
+            // 默认
+            default -> "application/octet-stream";
+        };
+    }
+
+    /**
+     * 获取文件扩展名。
+     */
+    private String getFileExtension(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return "";
+        }
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot > 0 && lastDot < fileName.length() - 1) {
+            return fileName.substring(lastDot + 1);
+        }
+        return "";
     }
 
     /**
