@@ -52,6 +52,9 @@ import org.springframework.beans.factory.annotation.Value;
 
 import io.jmix.flowui.view.MessageBundle;
 
+import io.jmix.flowui.component.codeeditor.CodeEditor;
+import io.jmix.flowui.kit.component.codeeditor.CodeEditorMode;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -782,6 +785,58 @@ public class MinioBrowserView extends StandardView {
             return fileName.substring(lastDot + 1);
         }
         return "";
+    }
+
+    // ==================== 文件预览支持 ====================
+
+    private static final Set<String> TEXT_EXTENSIONS = Set.of(
+        "txt", "xml", "json", "md", "log", "csv", "yml", "yaml",
+        "html", "htm", "css", "scss", "js", "ts", "java", "py",
+        "sql", "properties", "sh", "bat", "gradle", "kt", "go",
+        "rs", "c", "cpp", "h", "hpp", "vue", "jsx", "tsx"
+    );
+
+    private static final Set<String> IMAGE_EXTENSIONS = Set.of(
+        "jpg", "jpeg", "png", "gif", "bmp", "svg", "webp", "ico"
+    );
+
+    private static final Set<String> VIDEO_EXTENSIONS = Set.of(
+        "mp4", "webm"
+    );
+
+    private boolean isTextFile(String extension) {
+        return TEXT_EXTENSIONS.contains(extension.toLowerCase());
+    }
+
+    private boolean isImageFile(String extension) {
+        return IMAGE_EXTENSIONS.contains(extension.toLowerCase());
+    }
+
+    private boolean isVideoFile(String extension) {
+        return VIDEO_EXTENSIONS.contains(extension.toLowerCase());
+    }
+
+    private boolean isSupportedPreviewType(String extension) {
+        return isTextFile(extension) || isImageFile(extension) || isVideoFile(extension);
+    }
+
+    private CodeEditorMode detectLanguage(String extension) {
+        return switch (extension.toLowerCase()) {
+            case "java" -> CodeEditorMode.JAVA;
+            case "js" -> CodeEditorMode.JAVASCRIPT;
+            case "ts" -> CodeEditorMode.TEXT;
+            case "json" -> CodeEditorMode.JSON;
+            case "xml" -> CodeEditorMode.XML;
+            case "html", "htm" -> CodeEditorMode.HTML;
+            case "css", "scss" -> CodeEditorMode.CSS;
+            case "sql" -> CodeEditorMode.SQL;
+            case "py" -> CodeEditorMode.PYTHON;
+            case "md" -> CodeEditorMode.MARKDOWN;
+            case "yaml", "yml" -> CodeEditorMode.YAML;
+            case "properties" -> CodeEditorMode.PROPERTIES;
+            case "groovy", "gradle" -> CodeEditorMode.GROOVY;
+            default -> CodeEditorMode.TEXT;
+        };
     }
 
     private void showCreateFolderDialog() {
