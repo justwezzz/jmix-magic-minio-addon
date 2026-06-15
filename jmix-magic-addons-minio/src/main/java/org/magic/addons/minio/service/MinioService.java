@@ -1030,7 +1030,7 @@ public class MinioService {
             throw new IllegalArgumentException(msg("service.bucketRequired"));
         }
         if (threadCount <= 0) {
-            throw new IllegalArgumentException("threadCount must be greater than 0, got: " + threadCount);
+            throw new IllegalArgumentException(msg("service.threadCountInvalid", threadCount));
         }
         if (requests == null || requests.isEmpty()) {
             return CompletableFuture.completedFuture(BatchUploadResult.builder()
