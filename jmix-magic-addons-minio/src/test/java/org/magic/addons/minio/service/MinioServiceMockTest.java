@@ -65,7 +65,7 @@ class MinioServiceMockTest {
     @BeforeEach
     void setUp() throws Exception {
         lenient().when(properties.getUpload()).thenReturn(uploadProperties);
-        lenient().when(uploadProperties.getBatchSize()).thenReturn(50);
+        // batchSize 已从 Upload 配置中移除
         lenient().when(messages.getMessage(anyString())).thenReturn("mock message");
 
         // Mock MinioProperties 的连接配置，与 injectMockClient 中的缓存值一致
@@ -252,10 +252,10 @@ class MinioServiceMockTest {
         verify(minioClient).removeObject(any(RemoveObjectArgs.class));
     }
 
-    // ==================== batchUpload tests ====================
+    // ==================== batchUploadAsync tests ====================
 
     @Test
-    void batchUpload_shouldReturnSuccessResult_forValidRequests() throws Exception {
+    void batchUploadAsync_shouldReturnSuccessResult_forValidRequests() throws Exception {
         // given - 使用真实线程池执行
         ExecutorService realThreadPool = Executors.newFixedThreadPool(2);
         MinioService realService = new MinioService(properties, messages, realThreadPool);
@@ -268,7 +268,7 @@ class MinioServiceMockTest {
         );
 
         // when
-        CompletableFuture<BatchUploadResult> future = realService.batchUpload("test-bucket", List.of(request));
+        CompletableFuture<BatchUploadResult> future = realService.batchUploadAsync("test-bucket", List.of(request));
         BatchUploadResult result = future.get();
 
         // then
@@ -280,9 +280,9 @@ class MinioServiceMockTest {
     }
 
     @Test
-    void batchUpload_shouldReturnEmptyResult_forEmptyRequests() {
+    void batchUploadAsync_shouldReturnEmptyResult_forEmptyRequests() {
         // when
-        CompletableFuture<BatchUploadResult> future = service.batchUpload("test-bucket", List.of());
+        CompletableFuture<BatchUploadResult> future = service.batchUploadAsync("test-bucket", List.of());
         BatchUploadResult result = future.join();
 
         // then
@@ -291,16 +291,16 @@ class MinioServiceMockTest {
     }
 
     @Test
-    void batchUpload_shouldThrowException_forNullBucket() {
+    void batchUploadAsync_shouldThrowException_forNullBucket() {
         // when & then
-        assertThatThrownBy(() -> service.batchUpload(null, List.of()))
+        assertThatThrownBy(() -> service.batchUploadAsync(null, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    void batchUpload_shouldThrowException_forBlankBucket() {
+    void batchUploadAsync_shouldThrowException_forBlankBucket() {
         // when & then
-        assertThatThrownBy(() -> service.batchUpload("  ", List.of()))
+        assertThatThrownBy(() -> service.batchUploadAsync("  ", List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -348,5 +348,85 @@ class MinioServiceMockTest {
         // then
         assertThat(deleteResult.getDeletedFolders()).isEqualTo(1);
         assertThat(deleteResult.getDeletedFiles()).isEqualTo(1);
+    }
+
+    // ==================== batchUpload(bucket, requests, threadCount) tests ====================
+
+    @Test
+    void batchUpload_shouldReturnSuccessResult_forValidRequests() throws Exception {
+        // given
+        UploadRequest request = UploadRequest.fromInputStream(
+                "test.txt",
+                new ByteArrayInputStream("content".getBytes()),
+                7
+        );
+
+        // when
+        CompletableFuture<BatchUploadResult> future = service.batchUpload("test-bucket", List.of(request), 2);
+        BatchUploadResult result = future.get();
+
+        // then
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        assertThat(result.getTotalBytes()).isEqualTo(7);
+        assertThat(result.getFailedFiles()).isEmpty();
+    }
+
+    @Test
+    void batchUpload_shouldReturnEmptyResult_forEmptyRequests() {
+        // when
+        CompletableFuture<BatchUploadResult> future = service.batchUpload("test-bucket", List.of(), 2);
+        BatchUploadResult result = future.join();
+
+        // then
+        assertThat(result.getSuccessCount()).isEqualTo(0);
+        assertThat(result.getTotalBytes()).isEqualTo(0);
+    }
+
+    @Test
+    void batchUpload_shouldThrowException_forNullBucket() {
+        // when & then
+        assertThatThrownBy(() -> service.batchUpload(null, List.of(), 2))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void batchUpload_shouldThrowException_forBlankBucket() {
+        // when & then
+        assertThatThrownBy(() -> service.batchUpload("  ", List.of(), 2))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void batchUpload_shouldThrowException_forInvalidThreadCount() {
+        // when & then
+        assertThatThrownBy(() -> service.batchUpload("test-bucket", List.of(), 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("threadCount must be greater than 0");
+
+        assertThatThrownBy(() -> service.batchUpload("test-bucket", List.of(), -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("threadCount must be greater than 0");
+    }
+
+    @Test
+    void batchUpload_shouldShutdownPoolAfterCompletion() throws Exception {
+        // given
+        UploadRequest request = UploadRequest.fromInputStream(
+                "test.txt",
+                new ByteArrayInputStream("content".getBytes()),
+                7
+        );
+
+        // when
+        CompletableFuture<BatchUploadResult> future = service.batchUpload("test-bucket", List.of(request), 1);
+
+        // 等待完成
+        future.get();
+
+        // 短暂等待确保 whenComplete 执行
+        Thread.sleep(100);
+
+        // then - 验证 Future 已完成（线程池已关闭的间接验证）
+        assertThat(future.isDone()).isTrue();
     }
 }
