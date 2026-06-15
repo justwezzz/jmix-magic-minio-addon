@@ -12,6 +12,9 @@ import io.jmix.flowui.data.grid.ContainerDataGridItems;
 import io.jmix.flowui.kit.action.ActionPerformedEvent;
 import io.jmix.flowui.model.CollectionContainer;
 import io.jmix.flowui.model.DataComponents;
+import io.jmix.core.Metadata;
+import io.jmix.core.metamodel.model.MetaClass;
+import io.jmix.core.metamodel.model.MetaPropertyPath;
 import org.magic.addons.minio.component.PathSelector;
 import org.magic.addons.minio.dto.BatchDeleteResult;
 import org.magic.addons.minio.dto.MinioBucketDto;
@@ -82,6 +85,9 @@ public class MinioBrowserView extends StandardView {
 
     @Autowired
     private DataComponents dataComponents;
+
+    @Autowired
+    private Metadata metadata;
 
     @Autowired
     private io.jmix.core.Messages messages;
@@ -199,30 +205,36 @@ public class MinioBrowserView extends StandardView {
         // 清除所有自动生成的列
         bucketDataGrid.removeAllColumns();
 
-        // Bucket 名称列带图标
-        bucketDataGrid.addColumn(new ComponentRenderer<>(bucket -> {
-            HorizontalLayout layout = new HorizontalLayout();
-            layout.setAlignItems(com.vaadin.flow.component.orderedlayout.FlexComponent.Alignment.CENTER);
-            layout.setSpacing(true);
+        MetaClass bucketMeta = metadata.getClass(MinioBucketDto.class);
 
-            Icon icon = VaadinIcon.DATABASE.create();
-            icon.setColor("#4CAF50");
+        // Bucket 名称列：绑定 name property 走 Jmix 排序 + 图标渲染
+        // 注：DataGrid + ContainerDataGridItems 排序只认带 MetaPropertyPath 的列，setComparator 无效
+        bucketDataGrid.addColumn("nameWithIcon", bucketMeta.getPropertyPath("name"))
+                .setHeader(msg("minioBrowserView.columnName"))
+                .setRenderer(new ComponentRenderer<>(bucket -> {
+                    HorizontalLayout layout = new HorizontalLayout();
+                    layout.setAlignItems(com.vaadin.flow.component.orderedlayout.FlexComponent.Alignment.CENTER);
+                    layout.setSpacing(true);
 
-            Span name = new Span(bucket.getName());
-            layout.add(icon, name);
+                    Icon icon = VaadinIcon.DATABASE.create();
+                    icon.setColor("#4CAF50");
 
-            return layout;
-        })).setHeader(msg("minioBrowserView.columnName")).setKey("nameWithIcon").setAutoWidth(true);
+                    layout.add(icon, new Span(bucket.getName()));
+                    return layout;
+                }))
+                .setAutoWidth(true).setResizable(true);
 
-        // 格式化创建时间列
-        bucketDataGrid.addColumn(new ComponentRenderer<>(bucket -> {
-            LocalDateTime date = bucket.getCreationDate();
-            if (date == null) {
-                return new Span("-");
-            }
-            String formatted = date.format(DATE_TIME_FORMATTER);
-            return new Span(formatted);
-        })).setHeader(msg("minioBrowserView.columnCreationDate")).setKey("creationDateFormatted").setAutoWidth(true);
+        // 创建时间列：绑定 creationDate property 走 Jmix 排序 + 格式化渲染
+        bucketDataGrid.addColumn("creationDateFormatted", bucketMeta.getPropertyPath("creationDate"))
+                .setHeader(msg("minioBrowserView.columnCreationDate"))
+                .setRenderer(new ComponentRenderer<>(bucket -> {
+                    LocalDateTime date = bucket.getCreationDate();
+                    if (date == null) {
+                        return new Span("-");
+                    }
+                    return new Span(date.format(DATE_TIME_FORMATTER));
+                }))
+                .setAutoWidth(true).setResizable(true);
 
         // 选择事件
         bucketDataGrid.addSelectionListener(e -> {
@@ -234,7 +246,6 @@ public class MinioBrowserView extends StandardView {
         try {
             List<MinioBucketDto> buckets = minioService.listBuckets();
             bucketDc.setItems(buckets);
-            bucketDataGrid.setItems(new ContainerDataGridItems<>(bucketDc));
         } catch (Exception e) {
             // 显示错误提示
             statsLabel.setText(msg("minioBrowserView.connectionFailed"));
@@ -643,6 +654,7 @@ public class MinioBrowserView extends StandardView {
         fileTreeGrid.setDataProvider(treeDataProvider);
 
         // 名称列（使用层级列保留树形结构，用 VaadinIcon 替代 emoji）
+        // 自动充满剩余空间；文件名超长时省略 + 悬停 tooltip（同 ConfigBrowseView value 字段写法）
         fileTreeGrid.addComponentHierarchyColumn(node -> {
             HorizontalLayout layout = new HorizontalLayout();
             layout.setAlignItems(com.vaadin.flow.component.orderedlayout.FlexComponent.Alignment.CENTER);
@@ -660,19 +672,32 @@ public class MinioBrowserView extends StandardView {
             icon.setSize("16px");
 
             Span name = new Span(node.getName());
+            // 省略号 + tooltip —— 同 ConfigBrowseView value 字段写法
+            name.getStyle().set("overflow", "hidden");
+            name.getStyle().set("text-overflow", "ellipsis");
+            name.getStyle().set("white-space", "nowrap");
+            name.getStyle().set("display", "block");
+            // 仅当文本真的被省略时显示 tooltip（动态检测，避免固定字符阈值与动态列宽不匹配）
+            name.getElement().executeJs(
+                    "var el=this;el.addEventListener('mouseenter',function(){" +
+                    "el.title=(el.scrollWidth>el.clientWidth)?el.textContent:'';});");
+            // icon 包装结构必需：让 Span 在 HorizontalLayout 内收缩，触发省略号
+            layout.setFlexGrow(1, name);
+            name.setMinWidth("0");
+
             layout.add(icon, name);
             return layout;
-        }).setHeader(msg("minioBrowserView.columnName")).setKey("name").setAutoWidth(true);
+        }).setHeader(msg("minioBrowserView.columnName")).setKey("name").setFlexGrow(1).setResizable(true);
 
         fileTreeGrid.addColumn(node -> {
             if (node.getSize() == null) return "-";
             return minioService.formatSize(node.getSize());
-        }).setHeader(msg("minioBrowserView.columnSize")).setKey("size").setWidth("100px");
+        }).setHeader(msg("minioBrowserView.columnSize")).setKey("size").setWidth("100px").setFlexGrow(0).setResizable(true);
 
         fileTreeGrid.addColumn(node -> {
             if (node.getLastModified() == null) return "-";
             return node.getLastModified().format(DATE_TIME_FORMATTER);
-        }).setHeader(msg("minioBrowserView.columnLastModified")).setKey("lastModified").setWidth("150px");
+        }).setHeader(msg("minioBrowserView.columnLastModified")).setKey("lastModified").setWidth("180px").setFlexGrow(0).setResizable(true);
 
         // Shift + 点击范围选择（使用 ClientItemToggleListener）
         GridMultiSelectionModel<MinioTreeNode> selectionModel =
