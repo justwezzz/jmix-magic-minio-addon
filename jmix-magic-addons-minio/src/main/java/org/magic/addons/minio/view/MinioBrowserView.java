@@ -6,6 +6,7 @@ import io.jmix.flowui.view.ViewController;
 import io.jmix.flowui.view.ViewDescriptor;
 import io.jmix.flowui.view.ViewComponent;
 import io.jmix.flowui.view.Subscribe;
+import io.jmix.flowui.view.Install;
 import io.jmix.flowui.component.grid.DataGrid;
 import io.jmix.flowui.component.grid.TreeDataGrid;
 import io.jmix.flowui.data.grid.ContainerDataGridItems;
@@ -35,7 +36,7 @@ import com.vaadin.flow.component.html.Image;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.Icon;
 import com.vaadin.flow.component.icon.VaadinIcon;
-import com.vaadin.flow.component.menubar.MenuItem;
+import com.vaadin.flow.component.grid.contextmenu.GridMenuItem;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
@@ -146,7 +147,7 @@ public class MinioBrowserView extends StandardView {
     private Button loadMoreButton;
 
     @ViewComponent
-    private MenuItem selectFolderContentsItem;
+    private GridMenuItem<MinioTreeNode> selectFolderContentsItem;
 
     private MinioTreeNode contextMenuTargetFolder;
 
@@ -986,25 +987,30 @@ public class MinioBrowserView extends StandardView {
             boolean isVisible = fileTreeGrid.isDetailsVisible(item);
             fileTreeGrid.setDetailsVisible(item, !isVisible);
         });
+    }
 
-        // 右键菜单动态显示
-        fileTreeGrid.addContextMenuOpenedListener(event -> {
-            // 记录右键目标
-            event.getItem().ifPresent(item -> {
-                if (item.getType() == NodeType.FOLDER) {
-                    contextMenuTargetFolder = item;
-                } else {
-                    contextMenuTargetFolder = null;
-                }
-            });
+    /**
+     * 右键菜单动态内容处理 - 控制菜单项显示。
+     * 只有右键点击文件夹时才显示"选中目录下所有文件"菜单。
+     */
+    @Install(to = "fileTreeGrid.contextMenu", subject = "dynamicContentHandler")
+    private boolean fileTreeGridContextMenuDynamicContentHandler(MinioTreeNode item) {
+        if (item == null) {
+            return true;
+        }
+        // 记录右键目标
+        if (item.getType() == NodeType.FOLDER) {
+            contextMenuTargetFolder = item;
+        } else {
+            contextMenuTargetFolder = null;
+        }
 
-            // 只有右键点击文件夹时才显示"选中目录下所有文件"菜单
-            boolean isFolder = event.getItem().isPresent()
-                    && event.getItem().get().getType() == NodeType.FOLDER;
-            if (selectFolderContentsItem != null) {
-                selectFolderContentsItem.setVisible(isFolder);
-            }
-        });
+        // 只有右键点击文件夹时才显示"选中目录下所有文件"菜单
+        boolean isFolder = item.getType() == NodeType.FOLDER;
+        if (selectFolderContentsItem != null) {
+            selectFolderContentsItem.setVisible(isFolder);
+        }
+        return true;
     }
 
     /**
