@@ -765,8 +765,6 @@ public class MinioBrowserView extends StandardView {
                 return createTextPreview(node);
             } else if (isImageFile(extension)) {
                 return createImagePreview(node);
-            } else if (isVideoFile(extension)) {
-                return createVideoPreview(node);
             } else {
                 return new Span();
             }
@@ -857,46 +855,6 @@ public class MinioBrowserView extends StandardView {
         image.setSrc(presignedUrl);
 
         layout.add(closeBtn, image);
-
-        // 使用 JavaScript 阻止 Vaadin Grid contextMenu，保留浏览器默认菜单
-        layout.getElement().executeJs(
-            "this.addEventListener('contextmenu', e => { e.stopPropagation(); }, true);"
-        );
-
-        return layout;
-    }
-
-    /**
-     * 创建视频预览组件。
-     */
-    private Component createVideoPreview(MinioTreeNode node) {
-        VerticalLayout layout = new VerticalLayout();
-        layout.setWidthFull();
-        layout.setPadding(true);
-        layout.setSpacing(false);
-        layout.getStyle().set("position", "relative");
-
-        // 关闭按钮
-        Button closeBtn = new Button("×", e -> fileTreeGrid.setDetailsVisible(node, false));
-        closeBtn.getStyle()
-                .set("position", "absolute")
-                .set("right", "8px")
-                .set("top", "8px")
-                .set("z-index", "1");
-        closeBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_TERTIARY);
-
-        // 视频
-        String presignedUrl = minioService.getPresignedUrl(node.getBucket(), node.getPath(), 3600);
-        String videoType = "video/" + getFileExtension(node.getName());
-
-        Html video = new Html(String.format(
-            "<video controls style='max-width:100%%; max-height:400px;'>"
-            + "<source src='%s' type='%s'>"
-            + "您的浏览器不支持视频播放</video>",
-            presignedUrl, videoType
-        ));
-
-        layout.add(closeBtn, video);
 
         // 使用 JavaScript 阻止 Vaadin Grid contextMenu，保留浏览器默认菜单
         layout.getElement().executeJs(
@@ -999,15 +957,17 @@ public class MinioBrowserView extends StandardView {
 
             String extension = getFileExtension(item.getName()).toLowerCase();
 
-            if (!isSupportedPreviewType(extension)) {
-                // 不支持的格式
-                showNotification(msg("minioBrowserView.previewNotSupported"), NotificationVariant.LUMO_WARNING);
-                return;
+            if (isTextFile(extension) || isImageFile(extension)) {
+                // 文本/图片：切换行详情展开
+                boolean isVisible = fileTreeGrid.isDetailsVisible(item);
+                fileTreeGrid.setDetailsVisible(item, !isVisible);
+            } else if (isBrowserSupported(extension)) {
+                // 浏览器支持：新标签页打开
+                openInNewTab(item);
+            } else {
+                // 不支持：询问下载
+                showUnsupportedPreviewDialog(item);
             }
-
-            // 切换详情展开状态
-            boolean isVisible = fileTreeGrid.isDetailsVisible(item);
-            fileTreeGrid.setDetailsVisible(item, !isVisible);
         });
     }
 
@@ -1034,6 +994,41 @@ public class MinioBrowserView extends StandardView {
             selectFolderContentsItem.setVisible(isFolder);
         }
         return true;
+    }
+
+    /**
+     * 在新标签页打开文件（使用预签名 URL）。
+     */
+    private void openInNewTab(MinioTreeNode item) {
+        String presignedUrl = minioService.getPresignedUrl(
+            item.getBucket(),
+            item.getPath(),
+            3600  // 1小时有效
+        );
+        getUI().ifPresent(ui -> ui.getPage().open(presignedUrl, "_blank"));
+    }
+
+    /**
+     * 显示不支持预览的对话框，询问是否下载。
+     */
+    private void showUnsupportedPreviewDialog(MinioTreeNode item) {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle(msg("minioBrowserView.previewNotSupportedTitle"));
+        dialog.setWidth("400px");
+
+        Span message = new Span(msg("minioBrowserView.previewNotSupportedMessage"));
+
+        Button downloadBtn = new Button(msg("minioBrowserView.download"), e -> {
+            dialog.close();
+            downloadSingleFile(item);
+        });
+        downloadBtn.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        Button cancelBtn = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
+
+        dialog.add(message);
+        dialog.getFooter().add(cancelBtn, downloadBtn);
+        dialog.open();
     }
 
     /**
@@ -1091,6 +1086,10 @@ public class MinioBrowserView extends StandardView {
 
     // ==================== 文件预览支持 ====================
 
+    private static final Set<String> BROWSER_SUPPORTED_EXTENSIONS = Set.of(
+        "pdf", "mp3", "wav", "ogg", "aac", "mp4", "webm", "ogv"
+    );
+
     private static final Set<String> TEXT_EXTENSIONS = Set.of(
         "txt", "xml", "json", "md", "log", "csv", "yml", "yaml",
         "html", "htm", "css", "scss", "js", "ts", "java", "py",
@@ -1102,10 +1101,6 @@ public class MinioBrowserView extends StandardView {
         "jpg", "jpeg", "png", "gif", "bmp", "svg", "webp", "ico"
     );
 
-    private static final Set<String> VIDEO_EXTENSIONS = Set.of(
-        "mp4", "webm"
-    );
-
     private boolean isTextFile(String extension) {
         return TEXT_EXTENSIONS.contains(extension.toLowerCase());
     }
@@ -1114,12 +1109,8 @@ public class MinioBrowserView extends StandardView {
         return IMAGE_EXTENSIONS.contains(extension.toLowerCase());
     }
 
-    private boolean isVideoFile(String extension) {
-        return VIDEO_EXTENSIONS.contains(extension.toLowerCase());
-    }
-
-    private boolean isSupportedPreviewType(String extension) {
-        return isTextFile(extension) || isImageFile(extension) || isVideoFile(extension);
+    private boolean isBrowserSupported(String extension) {
+        return BROWSER_SUPPORTED_EXTENSIONS.contains(extension.toLowerCase());
     }
 
     private CodeEditorMode detectLanguage(String extension) {
