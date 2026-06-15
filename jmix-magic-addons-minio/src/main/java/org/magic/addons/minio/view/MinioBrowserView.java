@@ -35,6 +35,7 @@ import com.vaadin.flow.component.html.Image;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.Icon;
 import com.vaadin.flow.component.icon.VaadinIcon;
+import com.vaadin.flow.component.menubar.MenuItem;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
@@ -143,6 +144,11 @@ public class MinioBrowserView extends StandardView {
     private String currentSearchKeyword;
     private List<MinioTreeNode> searchResults;
     private Button loadMoreButton;
+
+    @ViewComponent
+    private MenuItem selectFolderContentsItem;
+
+    private MinioTreeNode contextMenuTargetFolder;
 
     // ==================== i18n helpers ====================
 
@@ -685,6 +691,33 @@ public class MinioBrowserView extends StandardView {
         }
     }
 
+    @Subscribe("selectFolderContentsAction")
+    public void onSelectFolderContentsAction(final ActionPerformedEvent event) {
+        if (contextMenuTargetFolder == null) {
+            return;
+        }
+
+        MinioTreeNode folder = contextMenuTargetFolder;
+
+        // 获取该文件夹下的直接子节点（第一层）
+        List<MinioTreeNode> children = treeData.getChildren(folder);
+
+        // 过滤掉占位符节点
+        List<MinioTreeNode> toSelect = children.stream()
+                .filter(node -> !node.getPath().endsWith(".placeholder"))
+                .collect(Collectors.toList());
+
+        if (toSelect.isEmpty()) {
+            showNotification(msg("minioBrowserView.folderEmpty"), NotificationVariant.LUMO_WARNING);
+            return;
+        }
+
+        // 选中这些节点
+        fileTreeGrid.asMultiSelect().setValue(new HashSet<>(toSelect));
+        showNotification(String.format(msg("minioBrowserView.selectedFolderContents"), toSelect.size()),
+                NotificationVariant.LUMO_SUCCESS);
+    }
+
     private void doDownloadSelected() {
         Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
         if (selected.isEmpty()) {
@@ -952,6 +985,25 @@ public class MinioBrowserView extends StandardView {
             // 切换详情展开状态
             boolean isVisible = fileTreeGrid.isDetailsVisible(item);
             fileTreeGrid.setDetailsVisible(item, !isVisible);
+        });
+
+        // 右键菜单动态显示
+        fileTreeGrid.addContextMenuOpenedListener(event -> {
+            // 记录右键目标
+            event.getItem().ifPresent(item -> {
+                if (item.getType() == NodeType.FOLDER) {
+                    contextMenuTargetFolder = item;
+                } else {
+                    contextMenuTargetFolder = null;
+                }
+            });
+
+            // 只有右键点击文件夹时才显示"选中目录下所有文件"菜单
+            boolean isFolder = event.getItem().isPresent()
+                    && event.getItem().get().getType() == NodeType.FOLDER;
+            if (selectFolderContentsItem != null) {
+                selectFolderContentsItem.setVisible(isFolder);
+            }
         });
     }
 
