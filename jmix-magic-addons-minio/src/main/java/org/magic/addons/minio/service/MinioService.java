@@ -196,7 +196,7 @@ public class MinioService {
 
             // 批量删除对象
             if (!objectsToDelete.isEmpty()) {
-                log.info(msg("service.deletingBucketObjects"), name, objectsToDelete.size());
+                log.debug(msg("service.deletingBucketObjects"), name, objectsToDelete.size());
                 Iterable<io.minio.Result<DeleteError>> errors = getClient().removeObjects(
                         RemoveObjectsArgs.builder().bucket(name).objects(objectsToDelete).build()
                 );
@@ -266,7 +266,7 @@ public class MinioService {
             // 4. 删除空 Bucket
             deleteBucket(oldName);
 
-            log.info("重命名 Bucket: {} -> {}", oldName, newName);
+            log.debug("重命名 Bucket: {} -> {}", oldName, newName);
 
         } catch (IllegalArgumentException | IllegalStateException e) {
             throw e;
@@ -425,7 +425,7 @@ public class MinioService {
                             .build()
             );
 
-            log.info("创建文件夹: bucket={}, path={}", bucket, folderPath);
+            log.debug("创建文件夹: bucket={}, path={}", bucket, folderPath);
         } catch (Exception e) {
             log.error("创建文件夹失败: bucket={}, path={}", bucket, folderPath, e);
             throw new RuntimeException(msg("service.folderCreateFailed", e.getMessage()), e);
@@ -580,7 +580,7 @@ public class MinioService {
                 );
             }
 
-            log.info("删除文件夹: bucket={}, path={}, 删除对象数={}", bucket, folderPath, objectsToDelete.size());
+            log.debug("删除文件夹: bucket={}, path={}, 删除对象数={}", bucket, folderPath, objectsToDelete.size());
         } catch (Exception e) {
             log.error("删除文件夹失败: bucket={}, path={}", bucket, folderPath, e);
             throw new RuntimeException(msg("service.folderDeleteFailed", e.getMessage()), e);
@@ -601,7 +601,7 @@ public class MinioService {
                             .build()
             );
 
-            log.info("上传文件: bucket={}, object={}", bucket, objectName);
+            log.debug("上传文件: bucket={}, object={}", bucket, objectName);
         } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
@@ -633,7 +633,7 @@ public class MinioService {
                             .build()
             );
 
-            log.info("删除文件: bucket={}, object={}", bucket, objectName);
+            log.debug("删除文件: bucket={}, object={}", bucket, objectName);
         } catch (Exception e) {
             log.error("删除文件失败: bucket={}, object={}", bucket, objectName, e);
             throw new RuntimeException(msg("service.fileDeleteFailed", e.getMessage()), e);
@@ -935,7 +935,7 @@ public class MinioService {
             // 更新创建的文件夹数量
             result.setCreatedFolders(result.getCreatedFolders() + createdFolders.size());
 
-            log.info("上传文件夹完成: bucket={}, local={}, uploaded={} files, created={} folders",
+            log.debug("上传文件夹完成: bucket={}, local={}, uploaded={} files, created={} folders",
                 bucket, localFolder, result.getUploadedFiles(), result.getCreatedFolders());
 
         } catch (Exception e) {
@@ -999,7 +999,7 @@ public class MinioService {
                     .build());
         }
 
-        log.info(msg("service.batchUploadStart"), bucket, requests.size(), requests.size());
+        log.debug(msg("service.batchUploadStart"), bucket, requests.size(), requests.size());
 
         // 为每个文件创建独立的异步任务
         List<CompletableFuture<BatchUploadResult>> futures = requests.stream()
@@ -1040,7 +1040,7 @@ public class MinioService {
                     .build());
         }
 
-        log.info("批量上传开始: bucket={}, 文件数={}, 线程数={}", bucket, requests.size(), threadCount);
+        log.debug("批量上传开始: bucket={}, 文件数={}, 线程数={}", bucket, requests.size(), threadCount);
 
         ExecutorService tempPool = Executors.newFixedThreadPool(threadCount);
 
