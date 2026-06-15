@@ -22,6 +22,8 @@ import org.magic.addons.minio.dto.MinioTreeNode;
 import org.magic.addons.minio.dto.NodeType;
 import org.magic.addons.minio.dto.PagedSearchResult;
 import org.magic.addons.minio.service.MinioService;
+import com.vaadin.flow.component.Component;
+import com.vaadin.flow.component.Html;
 import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
@@ -29,6 +31,7 @@ import com.vaadin.flow.component.dialog.Dialog;
 import com.vaadin.flow.component.grid.Grid;
 import com.vaadin.flow.component.grid.GridMultiSelectionModel;
 import com.vaadin.flow.component.html.Anchor;
+import com.vaadin.flow.component.html.Image;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.Icon;
 import com.vaadin.flow.component.icon.VaadinIcon;
@@ -70,6 +73,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -647,6 +651,143 @@ public class MinioBrowserView extends StandardView {
         } else {
             downloadAsZip(selected);
         }
+    }
+
+    /**
+     * 创建文件预览渲染器。
+     */
+    private ComponentRenderer<Component, MinioTreeNode> createPreviewRenderer() {
+        return new ComponentRenderer<>(node -> {
+            if (node.getType() == NodeType.FOLDER) {
+                return new Span();
+            }
+
+            String extension = getFileExtension(node.getName()).toLowerCase();
+
+            if (isTextFile(extension)) {
+                return createTextPreview(node);
+            } else if (isImageFile(extension)) {
+                return createImagePreview(node);
+            } else if (isVideoFile(extension)) {
+                return createVideoPreview(node);
+            } else {
+                return new Span();
+            }
+        });
+    }
+
+    /**
+     * 创建文本文件预览组件。
+     */
+    private Component createTextPreview(MinioTreeNode node) {
+        VerticalLayout layout = new VerticalLayout();
+        layout.setWidthFull();
+        layout.setPadding(true);
+        layout.setSpacing(false);
+        layout.getStyle().set("position", "relative");
+
+        // 关闭按钮
+        Button closeBtn = new Button("×", e -> fileTreeGrid.setDetailsVisible(node, false));
+        closeBtn.getStyle()
+                .set("position", "absolute")
+                .set("right", "8px")
+                .set("top", "8px")
+                .set("z-index", "1");
+        closeBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_TERTIARY);
+
+        // CodeEditor
+        CodeEditor codeEditor = new CodeEditor();
+        codeEditor.setWidthFull();
+        codeEditor.setHeight("300px");
+        codeEditor.setMode(detectLanguage(getFileExtension(node.getName())));
+        codeEditor.setReadOnly(true);
+        codeEditor.setValue(msg("minioBrowserView.previewLoading"));
+
+        // 异步加载文本内容
+        CompletableFuture.runAsync(() -> {
+            try {
+                String content = minioService.readTextContent(node.getBucket(), node.getPath());
+                getUI().ifPresent(ui -> ui.access(() -> {
+                    if (!content.isEmpty()) {
+                        codeEditor.setValue(content);
+                    } else {
+                        codeEditor.setValue("");
+                    }
+                }));
+            } catch (Exception e) {
+                getUI().ifPresent(ui -> ui.access(() ->
+                    codeEditor.setValue(msg("minioBrowserView.previewError", e.getMessage()))));
+            }
+        });
+
+        layout.add(closeBtn, codeEditor);
+        return layout;
+    }
+
+    /**
+     * 创建图片预览组件。
+     */
+    private Component createImagePreview(MinioTreeNode node) {
+        VerticalLayout layout = new VerticalLayout();
+        layout.setWidthFull();
+        layout.setPadding(true);
+        layout.setSpacing(false);
+        layout.getStyle().set("position", "relative");
+
+        // 关闭按钮
+        Button closeBtn = new Button("×", e -> fileTreeGrid.setDetailsVisible(node, false));
+        closeBtn.getStyle()
+                .set("position", "absolute")
+                .set("right", "8px")
+                .set("top", "8px")
+                .set("z-index", "1");
+        closeBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_TERTIARY);
+
+        // 图片
+        Image image = new Image();
+        image.setMaxWidth("100%");
+        image.setMaxHeight("400px");
+        image.setAlt(node.getName());
+
+        String presignedUrl = minioService.getPresignedUrl(node.getBucket(), node.getPath(), 300);
+        image.setSrc(presignedUrl);
+
+        layout.add(closeBtn, image);
+        return layout;
+    }
+
+    /**
+     * 创建视频预览组件。
+     */
+    private Component createVideoPreview(MinioTreeNode node) {
+        VerticalLayout layout = new VerticalLayout();
+        layout.setWidthFull();
+        layout.setPadding(true);
+        layout.setSpacing(false);
+        layout.getStyle().set("position", "relative");
+
+        // 关闭按钮
+        Button closeBtn = new Button("×", e -> fileTreeGrid.setDetailsVisible(node, false));
+        closeBtn.getStyle()
+                .set("position", "absolute")
+                .set("right", "8px")
+                .set("top", "8px")
+                .set("z-index", "1");
+        closeBtn.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_TERTIARY);
+
+        // 视频
+        String presignedUrl = minioService.getPresignedUrl(node.getBucket(), node.getPath(), 3600);
+        String videoType = "video/" + getFileExtension(node.getName());
+
+        Html video = new Html(String.format(
+            "<video controls style='max-width:100%%; max-height:400px;'>"
+            + "<source src='%s' type='%s'>"
+            + "您的浏览器不支持视频播放</video>",
+            presignedUrl, videoType
+        ));
+
+        layout.add(closeBtn, video);
+        return layout;
     }
 
     private void initFileTreeGrid() {
