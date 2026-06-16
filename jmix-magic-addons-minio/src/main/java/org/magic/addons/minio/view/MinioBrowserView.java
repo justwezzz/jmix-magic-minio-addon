@@ -114,6 +114,9 @@ public class MinioBrowserView extends StandardView {
     @ViewComponent
     private VerticalLayout bucketPanel;
 
+    @ViewComponent
+    private VerticalLayout filePanel;
+
     private CollectionContainer<MinioBucketDto> bucketDc;
 
     @ViewComponent
@@ -123,19 +126,10 @@ public class MinioBrowserView extends StandardView {
     private TextField searchField;
 
     @ViewComponent
-    private Span bucketLabel;
+    private Span statsLabel;
 
     @ViewComponent
-    private Span loadedLabel;
-
-    @ViewComponent
-    private Span selectedLabel;
-
-    @ViewComponent
-    private Span separator1;
-
-    @ViewComponent
-    private Span separator2;
+    private io.jmix.flowui.kit.action.Action selectAllFilesAction;
 
     @ViewComponent
     private com.vaadin.flow.component.orderedlayout.HorizontalLayout statsBar;
@@ -189,6 +183,8 @@ public class MinioBrowserView extends StandardView {
         bucketDataGrid.getStyle().set("flex-grow", "1");
         bucketDataGrid.getStyle().set("min-height", "0");
 
+        filePanel.getStyle().set("overflow", "visible");
+
         initBucketGrid();
         initFileTreeGrid();
         initSearchField();
@@ -202,11 +198,12 @@ public class MinioBrowserView extends StandardView {
         // 添加选择监听器更新统计
         fileTreeGrid.addSelectionListener(e -> updateSelectedStats());
 
-        // 状态栏紧凑：强制清零 padding/margin，压缩行高
+        // 状态栏紧凑：强制清零 padding/margin，压缩行高（对照 FileStorageBrowseView 单 label）
         statsBar.getStyle().set("padding", "0").set("margin", "0");
-        bucketLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
-        loadedLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
-        selectedLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
+        statsLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
+
+        // 初始化状态栏文本
+        updateStats();
 
         loadBuckets();
     }
@@ -298,9 +295,7 @@ public class MinioBrowserView extends StandardView {
             bucketDc.setItems(buckets);
         } catch (Exception e) {
             // 显示错误提示
-            bucketLabel.setText(msg("minioBrowserView.connectionFailed"));
-            loadedLabel.setText("");
-            selectedLabel.setText("");
+            statsLabel.setText(msg("minioBrowserView.connectionFailed"));
         }
     }
 
@@ -399,64 +394,69 @@ public class MinioBrowserView extends StandardView {
 
         // 刷新数据
         treeDataProvider.refreshAll();
+        // 展开懒加载后已加载统计已变化，刷新状态栏
+        updateStats();
     }
 
-    private void updateStats() {
-        // 1. 当前 Bucket 信息
+    /**
+     * 拼接状态栏完整文本（单 label 模式，对照 FileStorageBrowseView）
+     */
+    private String buildStatsText() {
         if (selectedBucket == null) {
-            bucketLabel.setText(msg("minioBrowserView.selectBucket"));
-            loadedLabel.setText("");
-            selectedLabel.setText("");
-            // 隐藏分隔符
-            separator1.setVisible(false);
-            separator2.setVisible(false);
-            return;
+            return msg("minioBrowserView.selectBucket");
         }
-        bucketLabel.setText(String.format(msg("minioBrowserView.currentBucket"), selectedBucket.getName()));
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format(msg("minioBrowserView.currentBucket"), selectedBucket.getName()));
 
-        // 2. 已加载统计
-        int folderCount = 0;
-        int fileCount = 0;
+        // 已加载统计（排除占位符）
+        int loadedFolders = 0;
+        int loadedFiles = 0;
         if (pathToNodeMap != null) {
             for (MinioTreeNode node : pathToNodeMap.values()) {
                 if (!node.getPath().endsWith(".placeholder")) {
                     if (node.getType() == NodeType.FOLDER) {
-                        folderCount++;
+                        loadedFolders++;
                     } else {
-                        fileCount++;
+                        loadedFiles++;
                     }
                 }
             }
         }
-        loadedLabel.setText(String.format(msg("minioBrowserView.loadedStats"), folderCount, fileCount));
-        // 显示第一个分隔符（Bucket 信息和已加载统计之间）
-        separator1.setVisible(true);
+        sb.append(" | ").append(String.format(msg("minioBrowserView.loadedStats"), loadedFolders, loadedFiles));
 
-        // 3. 选中统计
-        updateSelectedStats();
+        // 选中统计
+        if (fileTreeGrid != null) {
+            Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
+            if (!selected.isEmpty()) {
+                int selFolders = 0;
+                int selFiles = 0;
+                for (MinioTreeNode node : selected) {
+                    if (node.getType() == NodeType.FOLDER) {
+                        selFolders++;
+                    } else {
+                        selFiles++;
+                    }
+                }
+                sb.append(" | ").append(String.format(msg("minioBrowserView.selectedStats"), selFolders, selFiles));
+            }
+        }
+        return sb.toString();
+    }
+
+    private void updateStats() {
+        statsLabel.setText(buildStatsText());
+        updateSelectAllActionText();
     }
 
     /**
-     * 更新选中统计。
+     * 选中变化时更新状态栏（文本 + 全选按钮）
      */
     private void updateSelectedStats() {
-        if (fileTreeGrid == null || selectedLabel == null) {
+        if (fileTreeGrid == null || statsLabel == null) {
             return;
         }
-
-        Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
-        int folderCount = 0;
-        int fileCount = 0;
-        for (MinioTreeNode node : selected) {
-            if (node.getType() == NodeType.FOLDER) {
-                folderCount++;
-            } else {
-                fileCount++;
-            }
-        }
-        selectedLabel.setText(String.format(msg("minioBrowserView.selectedStats"), folderCount, fileCount));
-        // 有选中时显示第二个分隔符
-        separator2.setVisible(!selected.isEmpty());
+        statsLabel.setText(buildStatsText());
+        updateSelectAllActionText();
     }
 
     // ==================== Bucket 操作方法 ====================
@@ -696,27 +696,66 @@ public class MinioBrowserView extends StandardView {
             return;
         }
 
-        // 从内存中获取所有节点
         if (pathToNodeMap == null || pathToNodeMap.isEmpty()) {
             showNotification(msg("minioBrowserView.noFilesInDirectory"), NotificationVariant.LUMO_WARNING);
             return;
         }
 
-        List<MinioTreeNode> allItems = new ArrayList<>(pathToNodeMap.values());
+        // 只全选文件，不选目录
+        List<MinioTreeNode> allFiles = pathToNodeMap.values().stream()
+                .filter(n -> n.getType() == NodeType.FILE)
+                .collect(Collectors.toList());
 
-        // 检查当前是否已经全选
-        Set<MinioTreeNode> currentSelected = fileTreeGrid.getSelectedItems();
-        boolean isAllSelected = currentSelected.size() == allItems.size() && currentSelected.containsAll(allItems);
+        if (allFiles.isEmpty()) {
+            showNotification(msg("minioBrowserView.noFilesInDirectory"), NotificationVariant.LUMO_WARNING);
+            return;
+        }
 
-        if (isAllSelected) {
-            // 已全选，则清空选择（全反选）
-            fileTreeGrid.deselectAll();
+        Set<MinioTreeNode> current = new HashSet<>(fileTreeGrid.getSelectedItems());
+        if (isAllFilesSelected()) {
+            // 取消所有文件选中（保留已选目录）
+            current.removeAll(allFiles);
+            fileTreeGrid.asMultiSelect().setValue(current);
             showNotification(msg("minioBrowserView.deselectAll"), NotificationVariant.LUMO_SUCCESS);
         } else {
-            // 未全选，则全选
-            fileTreeGrid.asMultiSelect().setValue(allItems.stream().collect(Collectors.toSet()));
-            showNotification(String.format(msg("minioBrowserView.selectedCount"), allItems.size()), NotificationVariant.LUMO_SUCCESS);
+            // 全选所有文件（保留已选目录）
+            current.addAll(allFiles);
+            fileTreeGrid.asMultiSelect().setValue(current);
+            showNotification(String.format(msg("minioBrowserView.selectedCount"), allFiles.size()), NotificationVariant.LUMO_SUCCESS);
         }
+
+        updateSelectedStats();
+    }
+
+    /**
+     * 是否已选中所有文件节点（不含目录）
+     */
+    private boolean isAllFilesSelected() {
+        if (pathToNodeMap == null || pathToNodeMap.isEmpty()) {
+            return false;
+        }
+        List<MinioTreeNode> allFiles = pathToNodeMap.values().stream()
+                .filter(n -> n.getType() == NodeType.FILE)
+                .collect(Collectors.toList());
+        if (allFiles.isEmpty()) {
+            return false;
+        }
+        Set<MinioTreeNode> currentFiles = fileTreeGrid.getSelectedItems().stream()
+                .filter(n -> n.getType() == NodeType.FILE)
+                .collect(Collectors.toSet());
+        return currentFiles.size() == allFiles.size() && currentFiles.containsAll(allFiles);
+    }
+
+    /**
+     * 全选按钮文字切换：全选文件 ↔ 取消全选
+     */
+    private void updateSelectAllActionText() {
+        if (selectAllFilesAction == null) {
+            return;
+        }
+        selectAllFilesAction.setText(isAllFilesSelected()
+                ? msg("minioBrowserView.deselectAllBtn")
+                : msg("minioBrowserView.selectAll"));
     }
 
     @Subscribe("selectFolderContentsAction")
@@ -1603,6 +1642,8 @@ public class MinioBrowserView extends StandardView {
 
         // 刷新 DataProvider
         treeDataProvider.refreshAll();
+        // 新增节点后刷新状态栏统计
+        updateStats();
     }
 
     /**
@@ -1626,6 +1667,8 @@ public class MinioBrowserView extends StandardView {
 
         // 刷新 DataProvider
         treeDataProvider.refreshAll();
+        // 删除节点后刷新状态栏统计
+        updateStats();
     }
 
     // ==================== 搜索功能方法 ====================
@@ -1856,6 +1899,8 @@ public class MinioBrowserView extends StandardView {
                 }
             }
             treeDataProvider.refreshAll();
+            // 加载子节点后刷新状态栏统计
+            updateStats();
         }
     }
 

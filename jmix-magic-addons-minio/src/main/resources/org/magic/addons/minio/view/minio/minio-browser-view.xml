@@ -94,12 +94,8 @@
                     </contextMenu>
                 </treeDataGrid>
 
-                <hbox id="statsBar" width="100%" padding="false">
-                    <span id="bucketLabel" text="msg://minioBrowserView.selectBucket"/>
-                    <span id="separator1" text=" | "/>
-                    <span id="loadedLabel"/>
-                    <span id="separator2" text=" | "/>
-                    <span id="selectedLabel"/>
+                <hbox id="statsBar" width="100%">
+                    <span id="statsLabel" text="msg://minioBrowserView.selectBucket"/>
                 </hbox>
             </vbox>
 
