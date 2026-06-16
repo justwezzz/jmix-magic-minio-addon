@@ -2,10 +2,13 @@
 
 一个用于 Jmix 2.x 框架的 MinIO 文件存储插件，提供完整的文件浏览器界面。
 
+> 📖 **宿主项目集成与使用详见 [USAGE.md](USAGE.md)**
+
 ## 功能特性
 
 - **Bucket 管理**：创建、删除、重命名 Bucket
 - **文件浏览**：树形结构懒加载浏览文件
+- **文件预览**：双击文本/图片内联预览（CodeEditor 只读 / Image），PDF/音视频用浏览器原生预览，其他格式弹框提示下载；Ctrl + 单击文件名用浏览器新标签打开
 - **文件上传**：支持单文件和文件夹上传（保留目录结构），已汉化
 - **文件下载**：单文件下载和多文件 ZIP 打包下载
 - **搜索功能**：分页搜索文件
@@ -115,7 +118,7 @@ public interface MinioUserRole {
 
 ## i18n
 
-插件内置中文和英文双语支持，会根据用户 Locale 自动切换。
+插件内置中文（默认）和英文双语支持，会根据用户 Locale 自动切换。
 
 ## 技术栈
 
@@ -135,10 +138,6 @@ public interface MinioUserRole {
 ```bash
 ./gradlew publishToMavenLocal
 ```
-
-## 文档
-
-- [插件开发踩坑指南](docs/plugin-development-pitfalls.md) - 记录开发过程中遇到的问题及解决方案
 
 ## License
 

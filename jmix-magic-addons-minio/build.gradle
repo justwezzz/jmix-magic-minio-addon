@@ -12,6 +12,9 @@ dependencies {
     api 'io.jmix.security:jmix-security-flowui-starter'
     api 'io.minio:minio:8.5.10'
 
+    // Core Addon
+    api 'org.magic.addons:jmix-magic-addons-core:0.0.1'
+
     implementation 'org.springframework.boot:spring-boot-autoconfigure'
 
     // Test dependencies

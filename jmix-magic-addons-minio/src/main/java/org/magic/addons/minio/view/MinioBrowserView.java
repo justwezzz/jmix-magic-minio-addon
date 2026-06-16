@@ -23,6 +23,7 @@ import org.magic.addons.minio.dto.MinioTreeNode;
 import org.magic.addons.minio.dto.NodeType;
 import org.magic.addons.minio.dto.PagedSearchResult;
 import org.magic.addons.minio.service.MinioService;
+import org.magic.jmix.addons.core.treegrid.TreeGridScrollHelper;
 import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.Html;
 import com.vaadin.flow.component.UI;
@@ -130,6 +131,15 @@ public class MinioBrowserView extends StandardView {
     @ViewComponent
     private Span selectedLabel;
 
+    @ViewComponent
+    private Span separator1;
+
+    @ViewComponent
+    private Span separator2;
+
+    @ViewComponent
+    private com.vaadin.flow.component.orderedlayout.HorizontalLayout statsBar;
+
     @Value("${jmix.minio.download.max-files:1000}")
     private int downloadMaxFiles;
 
@@ -148,6 +158,7 @@ public class MinioBrowserView extends StandardView {
     private String currentSearchKeyword;
     private List<MinioTreeNode> searchResults;
     private Button loadMoreButton;
+    private boolean searchDialogMaximized = false;
 
     @ViewComponent
     private GridMenuItem<MinioTreeNode> selectFolderContentsItem;
@@ -190,6 +201,12 @@ public class MinioBrowserView extends StandardView {
 
         // 添加选择监听器更新统计
         fileTreeGrid.addSelectionListener(e -> updateSelectedStats());
+
+        // 状态栏紧凑：强制清零 padding/margin，压缩行高
+        statsBar.getStyle().set("padding", "0").set("margin", "0");
+        bucketLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
+        loadedLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
+        selectedLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
 
         loadBuckets();
     }
@@ -390,6 +407,9 @@ public class MinioBrowserView extends StandardView {
             bucketLabel.setText(msg("minioBrowserView.selectBucket"));
             loadedLabel.setText("");
             selectedLabel.setText("");
+            // 隐藏分隔符
+            separator1.setVisible(false);
+            separator2.setVisible(false);
             return;
         }
         bucketLabel.setText(String.format(msg("minioBrowserView.currentBucket"), selectedBucket.getName()));
@@ -409,6 +429,8 @@ public class MinioBrowserView extends StandardView {
             }
         }
         loadedLabel.setText(String.format(msg("minioBrowserView.loadedStats"), folderCount, fileCount));
+        // 显示第一个分隔符（Bucket 信息和已加载统计之间）
+        separator1.setVisible(true);
 
         // 3. 选中统计
         updateSelectedStats();
@@ -433,6 +455,8 @@ public class MinioBrowserView extends StandardView {
             }
         }
         selectedLabel.setText(String.format(msg("minioBrowserView.selectedStats"), folderCount, fileCount));
+        // 有选中时显示第二个分隔符
+        separator2.setVisible(!selected.isEmpty());
     }
 
     // ==================== Bucket 操作方法 ====================
@@ -1623,58 +1647,101 @@ public class MinioBrowserView extends StandardView {
         currentSearchKeyword = keyword;
         searchCursor = null;
         searchResults = new ArrayList<>();
+        searchDialogMaximized = false;
 
         // 创建搜索结果对话框
         if (searchDialog == null) {
-            searchDialog = new Dialog();
-            searchDialog.setHeaderTitle(msg("minioBrowserView.searchDialogTitle"));
-            searchDialog.setWidth("800px");
-            searchDialog.setHeight("600px");
-
-            searchResultGrid = new Grid<>();
-            searchResultGrid.setWidthFull();
-            searchResultGrid.setHeight("500px");
-
-            // 文件名列
-            searchResultGrid.addColumn(MinioTreeNode::getName)
-                .setHeader(msg("minioBrowserView.columnFileName"))
-                .setAutoWidth(true);
-
-            // 路径列
-            searchResultGrid.addColumn(MinioTreeNode::getPath)
-                .setHeader(msg("minioBrowserView.columnPath"))
-                .setAutoWidth(true);
-
-            // 大小列
-            searchResultGrid.addColumn(node -> minioService.formatSize(node.getSize()))
-                .setHeader(msg("minioBrowserView.columnSize"))
-                .setWidth("100px");
-
-            // 修改时间列
-            searchResultGrid.addColumn(node -> {
-                if (node.getLastModified() == null) return "-";
-                return node.getLastModified().format(DATE_TIME_FORMATTER);
-            }).setHeader(msg("minioBrowserView.columnLastModified")).setWidth("150px");
-
-            // 双击定位到文件树
-            searchResultGrid.addItemDoubleClickListener(e -> {
-                MinioTreeNode item = e.getItem();
-                navigateToItem(item);
-                searchDialog.close();
-            });
-
-            loadMoreButton = new Button(msg("minioBrowserView.searchLoadMore"), e -> loadMoreSearchResults());
-            Button closeButton = new Button(msg("minioBrowserView.dialogClose"), e -> searchDialog.close());
-
-            HorizontalLayout footer = new HorizontalLayout(loadMoreButton, closeButton);
-            searchDialog.getFooter().add(footer);
-            searchDialog.add(searchResultGrid);
+            initSearchDialog();
         }
 
         // 加载第一页结果
         loadMoreSearchResults();
 
         searchDialog.open();
+    }
+
+    private void initSearchDialog() {
+        searchDialog = new Dialog();
+        searchDialog.setWidth("60%");
+        searchDialog.setHeight("70%");
+        searchDialog.setResizable(true);
+        searchDialog.setModal(true);
+        searchDialog.setCloseOnOutsideClick(false);
+        searchDialog.setCloseOnEsc(false);
+        searchDialog.setDraggable(true);
+
+        // 最大化按钮
+        final Button[] maximizeBtnRef = new Button[1];
+        Button maximizeBtn = new Button(VaadinIcon.EXPAND.create(), e -> {
+            if (searchDialogMaximized) {
+                searchDialog.setWidth("60%");
+                searchDialog.setHeight("70%");
+                maximizeBtnRef[0].setIcon(VaadinIcon.EXPAND.create());
+                searchDialogMaximized = false;
+            } else {
+                searchDialog.setWidth("100vw");
+                searchDialog.setHeight("100vh");
+                maximizeBtnRef[0].setIcon(VaadinIcon.COMPRESS.create());
+                searchDialogMaximized = true;
+            }
+        });
+        maximizeBtnRef[0] = maximizeBtn;
+        maximizeBtn.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
+
+        // 关闭按钮
+        Button closeBtn = new Button(VaadinIcon.CLOSE.create(), e -> searchDialog.close());
+        closeBtn.addThemeVariants(ButtonVariant.LUMO_TERTIARY);
+
+        searchDialog.getHeader().add(maximizeBtn, closeBtn);
+
+        searchResultGrid = new Grid<>();
+        searchResultGrid.setSizeFull();
+
+        // 文件名列（省略号 + tooltip）
+        searchResultGrid.addComponentColumn(node -> createEllipsisCell(node.getName()))
+            .setHeader(msg("minioBrowserView.columnFileName")).setFlexGrow(1).setResizable(true);
+
+        // 路径列（省略号 + tooltip）
+        searchResultGrid.addComponentColumn(node -> createEllipsisCell(node.getPath()))
+            .setHeader(msg("minioBrowserView.columnPath")).setFlexGrow(1).setResizable(true);
+
+        // 大小列
+        searchResultGrid.addColumn(node -> minioService.formatSize(node.getSize()))
+            .setHeader(msg("minioBrowserView.columnSize")).setWidth("100px").setFlexGrow(0).setResizable(true);
+
+        // 修改时间列
+        searchResultGrid.addColumn(node -> {
+            if (node.getLastModified() == null) return "-";
+            return node.getLastModified().format(DATE_TIME_FORMATTER);
+        }).setHeader(msg("minioBrowserView.columnLastModified")).setWidth("180px").setFlexGrow(0).setResizable(true);
+
+        // 双击定位到文件树
+        searchResultGrid.addItemDoubleClickListener(e -> {
+            MinioTreeNode item = e.getItem();
+            searchDialog.close();
+            navigateToItem(item);
+        });
+
+        // 加载更多按钮（footer）
+        loadMoreButton = new Button(msg("minioBrowserView.searchLoadMore"), e -> loadMoreSearchResults());
+        searchDialog.getFooter().add(loadMoreButton);
+
+        searchDialog.add(searchResultGrid);
+    }
+
+    /**
+     * 创建省略号单元格（文本超出显示省略号，悬停显示完整内容 tooltip）
+     */
+    private Span createEllipsisCell(String text) {
+        Span span = new Span(text);
+        span.getStyle().set("overflow", "hidden");
+        span.getStyle().set("text-overflow", "ellipsis");
+        span.getStyle().set("white-space", "nowrap");
+        span.getStyle().set("display", "block");
+        span.getElement().executeJs(
+            "var el=this;el.addEventListener('mouseenter',function(){" +
+            "el.title=(el.scrollWidth>el.clientWidth)?el.textContent:'';});");
+        return span;
     }
 
     private void loadMoreSearchResults() {
@@ -1704,6 +1771,7 @@ public class MinioBrowserView extends StandardView {
 
             // 更新加载更多按钮状态
             loadMoreButton.setVisible(result.isHasMore());
+            searchDialog.getFooter().getElement().getStyle().set("display", result.isHasMore() ? "" : "none");
 
         } catch (Exception e) {
             showNotification(String.format(msg("minioBrowserView.searchFailed"), e.getMessage()), NotificationVariant.LUMO_ERROR);
@@ -1805,26 +1873,14 @@ public class MinioBrowserView extends StandardView {
         // 选中节点
         fileTreeGrid.select(nodeToSelect);
 
-        // 获取扁平化列表中的索引
-        List<MinioTreeNode> flatList = flattenTreeData();
-        int targetIndex = -1;
-        for (int i = 0; i < flatList.size(); i++) {
-            if (flatList.get(i).equals(nodeToSelect)) {
-                targetIndex = i;
-                break;
-            }
-        }
-
-        if (targetIndex >= 0) {
-            // 滚动到目标索引之前的几行，让目标行出现在视口中上部
-            int scrollIndex = Math.max(0, targetIndex - 8);
-            final int index = scrollIndex;
-            UI.getCurrent().access(() -> {
-                UI.getCurrent().beforeClientResponse(fileTreeGrid, ctx -> {
-                    fileTreeGrid.getElement().executeJs("this.scrollToIndex($0)", index);
-                });
-            });
-        }
+        // 使用 TreeGridScrollHelper 滚动到目标节点
+        Optional<Integer> idx = TreeGridScrollHelper.scrollToNode(
+            fileTreeGrid,
+            treeData,
+            nodeToSelect,
+            node -> !node.getPath().endsWith(".placeholder"),
+            null
+        );
 
         showNotification(String.format(msg("minioBrowserView.located"), targetItem.getName()), NotificationVariant.LUMO_SUCCESS);
     }
