@@ -30,6 +30,7 @@ import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.dialog.Dialog;
+import com.vaadin.flow.component.grid.FooterRow;
 import com.vaadin.flow.component.grid.Grid;
 import com.vaadin.flow.component.grid.GridMultiSelectionModel;
 import com.vaadin.flow.component.html.Anchor;
@@ -125,14 +126,10 @@ public class MinioBrowserView extends StandardView {
     @ViewComponent
     private TextField searchField;
 
-    @ViewComponent
     private Span statsLabel;
 
     @ViewComponent
     private io.jmix.flowui.kit.action.Action selectAllFilesAction;
-
-    @ViewComponent
-    private com.vaadin.flow.component.orderedlayout.HorizontalLayout statsBar;
 
     @Value("${jmix.minio.download.max-files:1000}")
     private int downloadMaxFiles;
@@ -198,14 +195,72 @@ public class MinioBrowserView extends StandardView {
         // 添加选择监听器更新统计
         fileTreeGrid.addSelectionListener(e -> updateSelectedStats());
 
-        // 状态栏紧凑：强制清零 padding/margin，压缩行高（对照 FileStorageBrowseView 单 label）
-        statsBar.getStyle().set("padding", "0").set("margin", "0");
-        statsLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
+        // 状态栏：用 fileTreeGrid 的 FooterRow 承载（替代独立 hbox）
+        initStatsFooter();
 
         // 初始化状态栏文本
         updateStats();
 
+        // Ctrl + 鼠标悬停文件名 → 超链接样式 —— 对照 FileStorageBrowseView
+        initCtrlLinkHover();
+
         loadBuckets();
+    }
+
+    /**
+     * 状态栏：用 fileTreeGrid 的 FooterRow 承载（替代独立 hbox）。
+     * 单行 footer：statsLabel 放入最左侧 name 列的 footer cell（该列 flexGrow 撑满剩余宽度）。
+     * 注意：多选 checkbox 列是框架内部列，不在 getColumns() 内、无法纳入 join，
+     * 故文本从 name 列左缘起（非最左），但单行无空白、无 join 异常。
+     */
+    private void initStatsFooter() {
+        statsLabel = new Span();
+        statsLabel.getStyle().set("padding", "0").set("margin", "0").set("line-height", "1");
+
+        FooterRow statsFooter = fileTreeGrid.appendFooterRow();
+        statsFooter.getCell(fileTreeGrid.getColumnByKey("name")).setComponent(statsLabel);
+
+        // 把 footer 第一行第一个 td（多选 checkbox 列对应的空 cell）塌缩到 0 宽，
+        // 让 statsLabel 顶到最左。注入 shadow style（普通 CSS 穿不透 shadow DOM）。
+        fileTreeGrid.getElement().executeJs(
+                "const s=document.createElement('style');" +
+                "s.textContent='tfoot tr:first-child td:first-child" +
+                "{width:0!important;min-width:0!important;padding:0!important;}';" +
+                "this.shadowRoot.appendChild(s);");
+    }
+
+    /**
+     * 注入客户端脚本：按住 Ctrl 时鼠标悬停文件名，文件名变超链接样式（蓝色+下划线+手型）。
+     * 用 document 级监听 + class 标记，避免每次 mouseover 都做服务端往返。
+     * —— 照搬 FileStorageBrowseView#initCtrlLinkHover
+     */
+    private void initCtrlLinkHover() {
+        String js = """
+                (function(){
+                  if(window.__fsCtrlLink) return;
+                  window.__fsCtrlLink = true;
+                  function apply(el){ el.style.color='#1976D2'; el.style.textDecoration='underline'; el.style.cursor='pointer'; }
+                  function clear(el){ el.style.color=''; el.style.textDecoration=''; el.style.cursor=''; }
+                  document.addEventListener('mouseover', function(e){
+                    var el = e.target.closest && e.target.closest('.fs-file-name');
+                    if(el && e.ctrlKey) apply(el);
+                  });
+                  document.addEventListener('mouseout', function(e){
+                    var el = e.target.closest && e.target.closest('.fs-file-name');
+                    if(el) clear(el);
+                  });
+                  document.addEventListener('keydown', function(e){
+                    if(e.key==='Control'){
+                      var hovered = document.querySelector('.fs-file-name:hover');
+                      if(hovered) apply(hovered);
+                    }
+                  });
+                  document.addEventListener('keyup', function(e){
+                    if(e.key==='Control'){ document.querySelectorAll('.fs-file-name').forEach(clear); }
+                  });
+                })();
+                """;
+        getElement().executeJs(js);
     }
 
     @Subscribe("renameBucketAction")
@@ -376,8 +431,9 @@ public class MinioBrowserView extends StandardView {
             return;
         }
 
-        // 移除占位符节点
+        // 移除占位符节点（同步清理 pathToNodeMap，对齐 loadFolderChildren）
         treeData.removeItem(firstChild);
+        pathToNodeMap.remove(firstChild.getPath());
 
         // 加载真实的子节点
         List<MinioTreeNode> subItems = minioService.listObjects(folder.getBucket(), folder.getPath());
@@ -766,12 +822,13 @@ public class MinioBrowserView extends StandardView {
 
         MinioTreeNode folder = contextMenuTargetFolder;
 
-        // 获取该文件夹下的直接子节点（第一层）
-        List<MinioTreeNode> children = treeData.getChildren(folder);
+        // 确保子节点已加载（移除占位符并加载真实数据）—— 对齐 loadChildrenIfNeeded
+        loadFolderChildren(folder);
 
-        // 过滤掉占位符节点
-        List<MinioTreeNode> toSelect = children.stream()
+        // 收集第一层文件节点（过滤占位符与子文件夹，不递归）—— 对齐 type==FILE
+        List<MinioTreeNode> toSelect = treeData.getChildren(folder).stream()
                 .filter(node -> !node.getPath().endsWith(".placeholder"))
+                .filter(node -> node.getType() == NodeType.FILE)
                 .collect(Collectors.toList());
 
         if (toSelect.isEmpty()) {
@@ -779,8 +836,10 @@ public class MinioBrowserView extends StandardView {
             return;
         }
 
-        // 选中这些节点
-        fileTreeGrid.asMultiSelect().setValue(new HashSet<>(toSelect));
+        // 追加到现有选中 —— 对齐 getSelectedItems()+addAll
+        Set<MinioTreeNode> current = new HashSet<>(fileTreeGrid.getSelectedItems());
+        current.addAll(toSelect);
+        fileTreeGrid.asMultiSelect().setValue(current);
         showNotification(String.format(msg("minioBrowserView.selectedFolderContents"), toSelect.size()),
                 NotificationVariant.LUMO_SUCCESS);
     }
@@ -843,6 +902,8 @@ public class MinioBrowserView extends StandardView {
         layout.setPadding(true);
         layout.setSpacing(false);
         layout.getStyle().set("position", "relative");
+        // 右侧留白，避免 CodeEditor 挡住右上角的关闭按钮 —— 对照 FileStorageBrowseView
+        layout.getStyle().set("padding-right", "2em");
 
         // 关闭按钮
         Button closeBtn = new Button("×", e -> fileTreeGrid.setDetailsVisible(node, false));
@@ -859,6 +920,7 @@ public class MinioBrowserView extends StandardView {
         codeEditor.setHeight("300px");
         codeEditor.setMode(detectLanguage(getFileExtension(node.getName())));
         codeEditor.setReadOnly(true);
+        codeEditor.setShowPrintMargin(false);
         codeEditor.setValue(msg("minioBrowserView.previewLoading"));
 
         // 异步加载文本内容
@@ -962,6 +1024,10 @@ public class MinioBrowserView extends StandardView {
             name.getElement().executeJs(
                     "var el=this;el.addEventListener('mouseenter',function(){" +
                     "el.title=(el.scrollWidth>el.clientWidth)?el.textContent:'';});");
+            // 文件节点标记：Ctrl + 悬停时变超链接样式 —— 对照 FileStorageBrowseView
+            if (node.getType() == NodeType.FILE) {
+                name.addClassNames("fs-file-name");
+            }
             // icon 包装结构必需：让 Span 在 HorizontalLayout 内收缩，触发省略号
             layout.setFlexGrow(1, name);
             name.setMinWidth("0");
@@ -1018,6 +1084,12 @@ public class MinioBrowserView extends StandardView {
                 return; // 文件夹不处理
             }
 
+            // 文件大小为 0，取消预览 —— 对照 FileStorageBrowseView
+            if (item.getSize() == null || item.getSize() == 0) {
+                showNotification(msg("minioBrowserView.emptyFile"), NotificationVariant.LUMO_WARNING);
+                return;
+            }
+
             String extension = getFileExtension(item.getName()).toLowerCase();
 
             if (isTextFile(extension) || isImageFile(extension)) {
@@ -1030,6 +1102,17 @@ public class MinioBrowserView extends StandardView {
             } else {
                 // 不支持：询问下载
                 showUnsupportedPreviewDialog(item);
+            }
+        });
+
+        // Ctrl+点击文件：用浏览器打开预览（grid ItemClickListener，可靠触发）—— 对照 FileStorageBrowseView
+        fileTreeGrid.addItemClickListener(event -> {
+            MinioTreeNode item = event.getItem();
+            if (event.isCtrlKey() && item != null && item.getType() == NodeType.FILE) {
+                openInNewTab(item);
+                // 撤销选中 + 去掉单元格 focus 框（蓝色框）
+                fileTreeGrid.deselect(item);
+                fileTreeGrid.getElement().executeJs("this.activeItem = null; this.blur();");
             }
         });
     }
@@ -1602,8 +1685,9 @@ public class MinioBrowserView extends StandardView {
                 MinioTreeNode firstChild = children.get(0);
                 if (firstChild.getPath().endsWith(".placeholder")) {
                     // 父节点未展开过，需要加载完整内容
-                    // 移除占位符
+                    // 移除占位符（同步清理 pathToNodeMap，对齐 loadFolderChildren）
                     treeData.removeItem(firstChild);
+                    pathToNodeMap.remove(firstChild.getPath());
 
                     // 从服务器加载该目录的所有子节点
                     List<MinioTreeNode> existingNodes = minioService.listObjects(parent.getBucket(), parent.getPath());
@@ -1654,8 +1738,10 @@ public class MinioBrowserView extends StandardView {
     private void removeNodeFromTree(MinioTreeNode node) {
         if (treeData == null || pathToNodeMap == null) return;
 
-        // 从 Map 中删除
-        pathToNodeMap.remove(node.getPath());
+        // 递归清理子树：pathToNodeMap 条目 + Grid 选中状态
+        // （treeData.removeItem 会递归删 TreeData 子孙，但 pathToNodeMap 和 selection 需手动同步，
+        //   否则状态栏的「已加载」「选中」统计仍计入已删节点）
+        removeSubtreeFromMapsAndSelection(node);
 
         // 从 TreeData 中删除（会递归删除子节点）
         try {
@@ -1669,6 +1755,19 @@ public class MinioBrowserView extends StandardView {
         treeDataProvider.refreshAll();
         // 删除节点后刷新状态栏统计
         updateStats();
+    }
+
+    /**
+     * 递归清理节点及其已加载子孙的 pathToNodeMap 条目和 Grid 选中状态（删目录时子孙也要同步清理）。
+     */
+    private void removeSubtreeFromMapsAndSelection(MinioTreeNode node) {
+        // getChildren 返回不可变实时视图，拷贝后再遍历避免遍历中结构变更
+        List<MinioTreeNode> children = new ArrayList<>(treeData.getChildren(node));
+        for (MinioTreeNode child : children) {
+            removeSubtreeFromMapsAndSelection(child);
+        }
+        pathToNodeMap.remove(node.getPath());
+        fileTreeGrid.deselect(node);
     }
 
     // ==================== 搜索功能方法 ====================
@@ -1882,9 +1981,11 @@ public class MinioBrowserView extends StandardView {
 
         // 检查是否已加载（不是占位符）
         if (children.size() == 1 && children.get(0).getPath().endsWith(".placeholder")) {
-            // 移除占位符，加载真实数据
-            treeData.removeItem(children.get(0));
-            pathToNodeMap.remove(children.get(0).getPath());
+            // 先缓存引用：getChildren 返回内部列表的实时视图（UnmodifiableList），
+            // removeItem 后视图同步变空，不能再 children.get(0) —— 对照 onFolderExpand:373
+            MinioTreeNode placeholder = children.get(0);
+            treeData.removeItem(placeholder);
+            pathToNodeMap.remove(placeholder.getPath());
 
             List<MinioTreeNode> realChildren = minioService.listObjects(folderNode.getBucket(), folderNode.getPath());
             for (MinioTreeNode child : realChildren) {

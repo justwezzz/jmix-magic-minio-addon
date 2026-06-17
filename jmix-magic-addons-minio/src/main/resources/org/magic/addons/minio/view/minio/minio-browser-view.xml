@@ -93,10 +93,6 @@
                         <item action="refreshFileAction" icon="REFRESH"/>
                     </contextMenu>
                 </treeDataGrid>
-
-                <hbox id="statsBar" width="100%">
-                    <span id="statsLabel" text="msg://minioBrowserView.selectBucket"/>
-                </hbox>
             </vbox>
 
         </split>
