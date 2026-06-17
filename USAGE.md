@@ -58,9 +58,9 @@ dependencies {
 
 ```properties
 # MinIO 连接（必填）
-jmix.minio.endpoint=http://localhost:9000
-jmix.minio.access-key=minioadmin
-jmix.minio.secret-key=minioadmin
+magic.minio.endpoint=http://localhost:9000      # MinIO 服务地址
+magic.minio.access-key=minioadmin               # 访问密钥
+magic.minio.secret-key=minioadmin               # 秘密密钥
 ```
 
 ### 3. 添加菜单（menu.xml）
@@ -86,28 +86,34 @@ jmix.minio.secret-key=minioadmin
 
 | 配置项 | 说明 | 示例 |
 |--------|------|------|
-| `jmix.minio.endpoint` | MinIO 服务地址 | `http://localhost:9000` |
-| `jmix.minio.access-key` | 访问密钥 | `minioadmin` |
-| `jmix.minio.secret-key` | 秘密密钥 | `minioadmin` |
+| `magic.minio.endpoint` | MinIO 服务地址 | `http://localhost:9000` |
+| `magic.minio.access-key` | 访问密钥 | `minioadmin` |
+| `magic.minio.secret-key` | 秘密密钥 | `minioadmin` |
 
 ### 下载/上传限制（可选）
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `jmix.minio.download.max-files` | `1000` | ZIP 打包下载最大文件数 |
-| `jmix.minio.download.max-size` | `100MB` | 单文件下载最大大小 |
-| `jmix.minio.upload.max-size` | `50MB` | 单文件上传最大大小 |
-| `jmix.minio.upload.thread-pool-size` | — | 文件夹上传线程池大小 |
+| `magic.minio.download.max-files` | `1000` | ZIP 打包下载最大文件数 |
+| `magic.minio.download.max-size` | `100MB` | 单文件下载最大大小 |
+| `magic.minio.upload.max-size` | `50MB` | 单文件上传最大大小 |
+| `magic.minio.upload.thread-pool-size` | CPU核数×2 | 文件夹上传线程池大小 |
 
 ### 完整配置示例
 
 ```properties
-jmix.minio.endpoint=http://localhost:9000
-jmix.minio.access-key=minioadmin
-jmix.minio.secret-key=minioadmin
-jmix.minio.download.max-files=1000
-jmix.minio.download.max-size=100MB
-jmix.minio.upload.max-size=50MB
+# MinIO 连接（必填）
+magic.minio.endpoint=http://localhost:9000      # MinIO 服务地址
+magic.minio.access-key=minioadmin               # 访问密钥
+magic.minio.secret-key=minioadmin               # 秘密密钥
+
+# 下载配置（可选）
+magic.minio.download.max-files=1000             # ZIP 打包下载最大文件数
+magic.minio.download.max-size=100MB             # 单文件下载最大大小
+
+# 上传配置（可选）
+magic.minio.upload.max-size=50MB                # 单文件上传最大大小
+magic.minio.upload.thread-pool-size=8           # 文件夹上传线程池大小（默认 CPU核数×2）
 ```
 
 ---
@@ -135,7 +141,7 @@ import io.jmix.flowui.view.DefaultMainViewParent;
 import io.jmix.flowui.view.ViewController;
 import io.jmix.flowui.view.ViewDescriptor;
 import com.vaadin.flow.router.Route;
-import org.magic.addons.minio.view.MinioBrowserView;
+import org.magic.jmix.addons.minio.view.MinioBrowserView;
 
 @Route(value = "my-minio", layout = DefaultMainViewParent.class)
 @ViewController(id = "my_MinioView")
@@ -293,18 +299,18 @@ public interface MinioUserRole {
 
 | 消息键 | 说明 |
 |--------|------|
-| `org.magic.addons.minio.view/minioBrowserView.title` | 视图标题 |
-| `org.magic.addons.minio.view/minioBrowserView.selectAll` | 全选按钮 |
-| `org.magic.addons.minio.view/minioBrowserView.deselectAllBtn` | 取消全选按钮 |
-| `org.magic.addons.minio.view/minioBrowserView.selectFolderContents` | 全选目录下文件 |
-| `org.magic.addons.minio.view/minioBrowserView.searchDialogTitle` | 搜索对话框标题 |
-| `org.magic.addons.minio.view/minioBrowserView.searchLoadMore` | 加载更多 |
+| `org.magic.jmix.addons.minio.view/minioBrowserView.title` | 视图标题 |
+| `org.magic.jmix.addons.minio.view/minioBrowserView.selectAll` | 全选按钮 |
+| `org.magic.jmix.addons.minio.view/minioBrowserView.deselectAllBtn` | 取消全选按钮 |
+| `org.magic.jmix.addons.minio.view/minioBrowserView.selectFolderContents` | 全选目录下文件 |
+| `org.magic.jmix.addons.minio.view/minioBrowserView.searchDialogTitle` | 搜索对话框标题 |
+| `org.magic.jmix.addons.minio.view/minioBrowserView.searchLoadMore` | 加载更多 |
 
 ### 覆盖示例
 
 ```properties
 # src/main/resources/com/example/messages.properties
-org.magic.addons.minio.view/minioBrowserView.title=文件管理
+org.magic.jmix.addons.minio.view/minioBrowserView.title=文件管理
 ```
 
 ---
@@ -317,25 +323,25 @@ org.magic.addons.minio.view/minioBrowserView.title=文件管理
 
 **解决**：
 1. 确认 MinIO 服务已启动
-2. 检查 `jmix.minio.endpoint` 是否正确
+2. 检查 `magic.minio.endpoint` 是否正确
 3. 浏览器访问 endpoint 确认可达
 
 ### Q: 上传文件失败提示超过大小限制？
 
-**原因**：超过 `jmix.minio.upload.max-size` 限制。
+**原因**：超过 `magic.minio.upload.max-size` 限制。
 
 **解决**：调整配置：
 ```properties
-jmix.minio.upload.max-size=200MB
+magic.minio.upload.max-size=200MB
 ```
 
 ### Q: 下载大量文件失败？
 
-**原因**：超过 `jmix.minio.download.max-files` 限制（ZIP 打包）。
+**原因**：超过 `magic.minio.download.max-files` 限制（ZIP 打包）。
 
 **解决**：减少选中文件数，或调大配置：
 ```properties
-jmix.minio.download.max-files=2000
+magic.minio.download.max-files=2000
 ```
 
 ### Q: 双击文件没有预览？

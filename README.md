@@ -32,14 +32,16 @@ dependencies {
 
 ```properties
 # MinIO 连接（必填）
-jmix.minio.endpoint=http://localhost:9000
-jmix.minio.access-key=minioadmin
-jmix.minio.secret-key=minioadmin
+magic.minio.endpoint=http://localhost:9000      # MinIO 服务地址
+magic.minio.access-key=minioadmin               # 访问密钥
+magic.minio.secret-key=minioadmin               # 秘密密钥
 
-# 可选配置
-jmix.minio.download.max-files=1000
-jmix.minio.download.max-size=100MB
-jmix.minio.upload.max-size=50MB
+# 下载配置（可选）
+magic.minio.download.max-files=1000             # ZIP 打包下载最大文件数
+magic.minio.download.max-size=100MB             # 单文件下载最大大小
+
+# 上传配置（可选）
+magic.minio.upload.max-size=50MB                # 单文件上传最大大小
 ```
 
 ## 使用方式
