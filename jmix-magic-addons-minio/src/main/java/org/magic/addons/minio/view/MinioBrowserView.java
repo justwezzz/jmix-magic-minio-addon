@@ -23,6 +23,7 @@ import org.magic.addons.minio.dto.MinioTreeNode;
 import org.magic.addons.minio.dto.NodeType;
 import org.magic.addons.minio.dto.PagedSearchResult;
 import org.magic.addons.minio.service.MinioService;
+import org.magic.jmix.addons.core.notification.NotificationUtil;
 import org.magic.jmix.addons.core.treegrid.TreeGridScrollHelper;
 import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.Html;
@@ -39,8 +40,6 @@ import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.icon.Icon;
 import com.vaadin.flow.component.icon.VaadinIcon;
 import com.vaadin.flow.component.grid.contextmenu.GridMenuItem;
-import com.vaadin.flow.component.notification.Notification;
-import com.vaadin.flow.component.notification.NotificationVariant;
 import com.vaadin.flow.component.orderedlayout.HorizontalLayout;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.TextField;
@@ -154,7 +153,11 @@ public class MinioBrowserView extends StandardView {
     @ViewComponent
     private GridMenuItem<MinioTreeNode> selectFolderContentsItem;
 
+    // 右键菜单目标目录（用于"选中目录下所有文件"）
     private MinioTreeNode contextMenuTargetFolder;
+
+    // 右键菜单点击的节点（用于上传时默认选中目标目录）
+    private MinioTreeNode contextMenuTargetNode;
 
     // ==================== i18n helpers ====================
 
@@ -282,25 +285,42 @@ public class MinioBrowserView extends StandardView {
     public void onRefreshBucketAction(final ActionPerformedEvent event) {
         loadBuckets();
         clearFileTree();
-        showNotification(msg("minioBrowserView.bucketListRefreshed"), NotificationVariant.LUMO_SUCCESS);
+        NotificationUtil.success(msg("minioBrowserView.bucketListRefreshed"));
     }
 
     @Subscribe("uploadFileAction")
     public void onUploadFileAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
-            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
             return;
         }
-        showUploadFileDialog();
+        showUploadFileDialog(inferUploadTargetPath());
     }
 
     @Subscribe("uploadFolderAction")
     public void onUploadFolderAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
-            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
             return;
         }
-        showUploadFolderDialog();
+        showUploadFolderDialog(inferUploadTargetPath());
+    }
+
+    /**
+     * 推断上传目标路径（优先使用右键菜单点击的节点）
+     */
+    private String inferUploadTargetPath() {
+        // 优先使用右键菜单点击的节点
+        if (contextMenuTargetNode != null) {
+            if (contextMenuTargetNode.getType() == NodeType.FOLDER) {
+                return contextMenuTargetNode.getPath();
+            } else if (contextMenuTargetNode.getType() == NodeType.FILE) {
+                return minioService.extractParentPath(contextMenuTargetNode.getPath());
+            }
+        }
+
+        // 否则使用当前选中的节点
+        return inferDefaultPath();
     }
 
     private void initBucketGrid() {
@@ -534,9 +554,9 @@ public class MinioBrowserView extends StandardView {
                     minioService.createBucket(name);
                     dialog.close();
                     loadBuckets();
-                    showNotification(msg("minioBrowserView.bucketCreated"), NotificationVariant.LUMO_SUCCESS);
+                    NotificationUtil.success(msg("minioBrowserView.bucketCreated"));
                 } catch (Exception ex) {
-                    showNotification(String.format(msg("minioBrowserView.createFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+                    NotificationUtil.error(String.format(msg("minioBrowserView.createFailed"), ex.getMessage()));
                 }
             }
         });
@@ -553,7 +573,7 @@ public class MinioBrowserView extends StandardView {
     private void onDeleteBucketClick() {
         MinioBucketDto selected = bucketDataGrid.getSingleSelectedItem();
         if (selected == null) {
-            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
             return;
         }
 
@@ -570,11 +590,11 @@ public class MinioBrowserView extends StandardView {
                 dialog.close();
                 loadBuckets();
                 clearFileTree();
-                showNotification(msg("minioBrowserView.bucketDeleted"), NotificationVariant.LUMO_SUCCESS);
+                NotificationUtil.success(msg("minioBrowserView.bucketDeleted"));
             } catch (IllegalStateException ex) {
-                showNotification(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+                NotificationUtil.error(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()));
             } catch (Exception ex) {
-                showNotification(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+                NotificationUtil.error(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()));
             }
         });
         deleteButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_ERROR);
@@ -589,7 +609,7 @@ public class MinioBrowserView extends StandardView {
     private void onRenameBucketClick() {
         MinioBucketDto selected = bucketDataGrid.getSingleSelectedItem();
         if (selected == null) {
-            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
             return;
         }
 
@@ -606,7 +626,7 @@ public class MinioBrowserView extends StandardView {
         Button renameButton = new Button(msg("minioBrowserView.dialogRename"), e -> {
             String newName = nameField.getValue().trim();
             if (newName.equals(selected.getName())) {
-                showNotification(msg("minioBrowserView.sameName"), NotificationVariant.LUMO_WARNING);
+                NotificationUtil.warning(msg("minioBrowserView.sameName"));
                 return;
             }
             if (validateBucketName(newName)) {
@@ -615,9 +635,9 @@ public class MinioBrowserView extends StandardView {
                     dialog.close();
                     loadBuckets();
                     clearFileTree();
-                    showNotification(msg("minioBrowserView.bucketRenamed"), NotificationVariant.LUMO_SUCCESS);
+                    NotificationUtil.success(msg("minioBrowserView.bucketRenamed"));
                 } catch (Exception ex) {
-                    showNotification(String.format(msg("minioBrowserView.renameFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+                    NotificationUtil.error(String.format(msg("minioBrowserView.renameFailed"), ex.getMessage()));
                 }
             }
         });
@@ -633,28 +653,28 @@ public class MinioBrowserView extends StandardView {
 
     private boolean validateBucketName(String name) {
         if (name == null || name.isEmpty()) {
-            showNotification(msg("minioBrowserView.validationBucketNameEmpty"), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(msg("minioBrowserView.validationBucketNameEmpty"));
             return false;
         }
         if (name.length() < 3 || name.length() > 63) {
-            showNotification(msg("minioBrowserView.validationBucketNameLength"), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(msg("minioBrowserView.validationBucketNameLength"));
             return false;
         }
         // MinIO Bucket 命名规则：
         // - 只能包含小写字母、数字和短横线
         // - 必须以字母或数字开头和结尾
         if (!name.matches("^[a-z0-9][a-z0-9-]*[a-z0-9]$") && name.length() > 1) {
-            showNotification(msg("minioBrowserView.validationBucketNamePattern"), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(msg("minioBrowserView.validationBucketNamePattern"));
             return false;
         }
         // 单字符情况
         if (name.length() == 1 && !name.matches("^[a-z0-9]$")) {
-            showNotification(msg("minioBrowserView.validationBucketNameAlphanumeric"), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(msg("minioBrowserView.validationBucketNameAlphanumeric"));
             return false;
         }
         // 两字符情况
         if (name.length() == 2 && !name.matches("^[a-z0-9][a-z0-9]$")) {
-            showNotification(msg("minioBrowserView.validationBucketNameAlphanumeric"), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(msg("minioBrowserView.validationBucketNameAlphanumeric"));
             return false;
         }
         return true;
@@ -696,12 +716,6 @@ public class MinioBrowserView extends StandardView {
         return i18n;
     }
 
-    private void showNotification(String message, NotificationVariant variant) {
-        Notification notification = new Notification(message, 3000, Notification.Position.BOTTOM_END);
-        notification.addThemeVariants(variant);
-        notification.open();
-    }
-
     private void clearFileTree() {
         treeData = new TreeData<>();
         pathToNodeMap = new HashMap<>();
@@ -716,7 +730,7 @@ public class MinioBrowserView extends StandardView {
     @Subscribe("createFolderAction")
     public void onCreateFolderAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
-            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
             return;
         }
         showCreateFolderDialog();
@@ -726,7 +740,7 @@ public class MinioBrowserView extends StandardView {
     public void onDeleteFilesAction(final ActionPerformedEvent event) {
         Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
         if (selected.isEmpty()) {
-            showNotification(msg("minioBrowserView.selectFilesToDelete"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectFilesToDelete"));
             return;
         }
         showDeleteConfirmDialog(selected);
@@ -741,19 +755,19 @@ public class MinioBrowserView extends StandardView {
     public void onRefreshFileAction(final ActionPerformedEvent event) {
         if (selectedBucket != null) {
             refreshFileTree();
-            showNotification(msg("minioBrowserView.filesRefreshed"), NotificationVariant.LUMO_SUCCESS);
+            NotificationUtil.success(msg("minioBrowserView.filesRefreshed"));
         }
     }
 
     @Subscribe("selectAllFilesAction")
     public void onSelectAllFilesAction(final ActionPerformedEvent event) {
         if (selectedBucket == null) {
-            showNotification(msg("minioBrowserView.selectBucketFirst"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
             return;
         }
 
         if (pathToNodeMap == null || pathToNodeMap.isEmpty()) {
-            showNotification(msg("minioBrowserView.noFilesInDirectory"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.noFilesInDirectory"));
             return;
         }
 
@@ -763,7 +777,7 @@ public class MinioBrowserView extends StandardView {
                 .collect(Collectors.toList());
 
         if (allFiles.isEmpty()) {
-            showNotification(msg("minioBrowserView.noFilesInDirectory"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.noFilesInDirectory"));
             return;
         }
 
@@ -772,12 +786,12 @@ public class MinioBrowserView extends StandardView {
             // 取消所有文件选中（保留已选目录）
             current.removeAll(allFiles);
             fileTreeGrid.asMultiSelect().setValue(current);
-            showNotification(msg("minioBrowserView.deselectAll"), NotificationVariant.LUMO_SUCCESS);
+            NotificationUtil.success(msg("minioBrowserView.deselectAll"));
         } else {
             // 全选所有文件（保留已选目录）
             current.addAll(allFiles);
             fileTreeGrid.asMultiSelect().setValue(current);
-            showNotification(String.format(msg("minioBrowserView.selectedCount"), allFiles.size()), NotificationVariant.LUMO_SUCCESS);
+            NotificationUtil.success(String.format(msg("minioBrowserView.selectedCount"), allFiles.size()));
         }
 
         updateSelectedStats();
@@ -832,7 +846,7 @@ public class MinioBrowserView extends StandardView {
                 .collect(Collectors.toList());
 
         if (toSelect.isEmpty()) {
-            showNotification(msg("minioBrowserView.folderEmpty"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.folderEmpty"));
             return;
         }
 
@@ -840,36 +854,66 @@ public class MinioBrowserView extends StandardView {
         Set<MinioTreeNode> current = new HashSet<>(fileTreeGrid.getSelectedItems());
         current.addAll(toSelect);
         fileTreeGrid.asMultiSelect().setValue(current);
-        showNotification(String.format(msg("minioBrowserView.selectedFolderContents"), toSelect.size()),
-                NotificationVariant.LUMO_SUCCESS);
+        NotificationUtil.success(String.format(msg("minioBrowserView.selectedFolderContents"), toSelect.size()));
     }
 
     private void doDownloadSelected() {
         Set<MinioTreeNode> selected = fileTreeGrid.getSelectedItems();
         if (selected.isEmpty()) {
-            showNotification(msg("minioBrowserView.selectToDownload"), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(msg("minioBrowserView.selectToDownload"));
             return;
         }
 
-        // 统计文件数量
-        int fileCount = countFilesInSelection(selected);
-        if (downloadMaxFiles > 0 && fileCount > downloadMaxFiles) {
-            showNotification(String.format(msg("minioBrowserView.tooManyFiles"),
-                    fileCount, downloadMaxFiles), NotificationVariant.LUMO_WARNING);
+        // 过滤只保留文件和目录（忽略其他节点）
+        List<MinioTreeNode> toDownload = selected.stream()
+                .filter(n -> n.getType() == NodeType.FILE || n.getType() == NodeType.FOLDER)
+                .collect(java.util.stream.Collectors.toList());
+
+        if (toDownload.isEmpty()) {
+            NotificationUtil.warning(msg("minioBrowserView.selectToDownload"));
             return;
         }
 
-        // 判断下载方式
-        if (selected.size() == 1) {
-            MinioTreeNode item = selected.iterator().next();
-            if (item.getType() == NodeType.FILE) {
-                downloadSingleFile(item);
-            } else {
-                downloadAsZip(selected);
-            }
+        // 单个文件直接下载，其他情况显示确认框
+        boolean singleFile = toDownload.size() == 1 && toDownload.get(0).getType() == NodeType.FILE;
+        if (singleFile) {
+            downloadSingleFile(toDownload.get(0));
         } else {
-            downloadAsZip(selected);
+            // 统计用户选中的文件数和目录数（不递归）
+            long fileCount = toDownload.stream().filter(n -> n.getType() == NodeType.FILE).count();
+            long folderCount = toDownload.stream().filter(n -> n.getType() == NodeType.FOLDER).count();
+            showDownloadConfirmDialog(toDownload, fileCount, folderCount);
         }
+    }
+
+    private void showDownloadConfirmDialog(List<MinioTreeNode> toDownload, long fileCount, long folderCount) {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogConfirmDownloadTitle"));
+        dialog.setWidth("400px");
+
+        String confirmText = folderCount > 0
+                ? String.format(msg("minioBrowserView.dialogDownloadFilesWithFolders"), fileCount, folderCount)
+                : String.format(msg("minioBrowserView.dialogDownloadFiles"), fileCount);
+        Span message = new Span(confirmText);
+
+        Button downloadButton = new Button(msg("minioBrowserView.dialogDownload"), e -> {
+            dialog.close();
+            // 用户确认后再统计实际文件数量（递归计算）并检查限制
+            int actualFileCount = countFilesInSelection(new java.util.HashSet<>(toDownload));
+            if (downloadMaxFiles > 0 && actualFileCount > downloadMaxFiles) {
+                NotificationUtil.warning(String.format(msg("minioBrowserView.tooManyFiles"),
+                        actualFileCount, downloadMaxFiles));
+                return;
+            }
+            downloadAsZip(new java.util.HashSet<>(toDownload));
+        });
+        downloadButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        Button cancelButton = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
+
+        dialog.add(message);
+        dialog.getFooter().add(cancelButton, downloadButton);
+        dialog.open();
     }
 
     /**
@@ -1086,7 +1130,7 @@ public class MinioBrowserView extends StandardView {
 
             // 文件大小为 0，取消预览 —— 对照 FileStorageBrowseView
             if (item.getSize() == null || item.getSize() == 0) {
-                showNotification(msg("minioBrowserView.emptyFile"), NotificationVariant.LUMO_WARNING);
+                NotificationUtil.warning(msg("minioBrowserView.emptyFile"));
                 return;
             }
 
@@ -1127,7 +1171,10 @@ public class MinioBrowserView extends StandardView {
         if (item == null) {
             return false;  // 预览区域不显示右键菜单
         }
-        // 记录右键目标
+        // 记录右键目标节点（用于上传时默认选中）
+        contextMenuTargetNode = item;
+
+        // 记录右键目标文件夹（用于"选中目录下所有文件"）
         if (item.getType() == NodeType.FOLDER) {
             contextMenuTargetFolder = item;
         } else {
@@ -1302,7 +1349,7 @@ public class MinioBrowserView extends StandardView {
         Button createButton = new Button(msg("minioBrowserView.dialogCreate"), e -> {
             String name = nameField.getValue().trim();
             if (name.isEmpty()) {
-                showNotification(msg("minioBrowserView.validationFolderNameEmpty"), NotificationVariant.LUMO_WARNING);
+                NotificationUtil.warning(msg("minioBrowserView.validationFolderNameEmpty"));
                 return;
             }
             try {
@@ -1322,9 +1369,9 @@ public class MinioBrowserView extends StandardView {
                         .build();
                 addNodeToTree(folderNode);
 
-                showNotification(msg("minioBrowserView.folderCreated"), NotificationVariant.LUMO_SUCCESS);
+                NotificationUtil.success(msg("minioBrowserView.folderCreated"));
             } catch (Exception ex) {
-                showNotification(String.format(msg("minioBrowserView.createFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+                NotificationUtil.error(String.format(msg("minioBrowserView.createFailed"), ex.getMessage()));
             }
         });
         createButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
@@ -1337,7 +1384,7 @@ public class MinioBrowserView extends StandardView {
         nameField.focus();
     }
 
-    private void showUploadFileDialog() {
+    private void showUploadFileDialog(String targetPath) {
         Dialog dialog = new Dialog();
         dialog.setHeaderTitle(msg("minioBrowserView.dialogUploadFileTitle"));
         dialog.setWidth("500px");
@@ -1349,15 +1396,15 @@ public class MinioBrowserView extends StandardView {
         // 路径选择器
         PathSelector pathSelector = new PathSelector(minioService, messages);
         pathSelector.setBucket(selectedBucket.getName());
-        pathSelector.setSelectedPath(inferDefaultPath());
+        pathSelector.setSelectedPathAndExpand(targetPath);
 
         // 使用 Vaadin Upload 组件
         UploadHandler handler = UploadHandler.inMemory((metadata, data) -> {
             String fileName = metadata.fileName();
             long contentLength = metadata.contentLength();
             try {
-                String targetPath = pathSelector.getSelectedPath();
-                String objectPath = targetPath + fileName;
+                String targetPathFromSelector = pathSelector.getSelectedPath();
+                String objectPath = targetPathFromSelector + fileName;
                 minioService.uploadFile(
                         selectedBucket.getName(),
                         objectPath,
@@ -1378,9 +1425,9 @@ public class MinioBrowserView extends StandardView {
                         .build();
                 addNodeToTree(newNode);
 
-                showNotification(String.format(msg("minioBrowserView.fileUploaded"), fileName), NotificationVariant.LUMO_SUCCESS);
+                NotificationUtil.success(String.format(msg("minioBrowserView.fileUploaded"), fileName));
             } catch (Exception ex) {
-                showNotification(String.format(msg("minioBrowserView.uploadFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+                NotificationUtil.error(String.format(msg("minioBrowserView.uploadFailed"), ex.getMessage()));
             }
         });
 
@@ -1390,7 +1437,7 @@ public class MinioBrowserView extends StandardView {
         upload.setI18n(createUploadI18n());
 
         upload.addFileRejectedListener(event -> {
-            showNotification(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()));
         });
 
         content.add(pathSelector, upload);
@@ -1402,7 +1449,7 @@ public class MinioBrowserView extends StandardView {
         dialog.open();
     }
 
-    private void showUploadFolderDialog() {
+    private void showUploadFolderDialog(String targetPath) {
         Dialog dialog = new Dialog();
         dialog.setHeaderTitle(msg("minioBrowserView.dialogUploadFolderTitle"));
         dialog.setWidth("600px");
@@ -1413,7 +1460,7 @@ public class MinioBrowserView extends StandardView {
         // 路径选择器
         PathSelector pathSelector = new PathSelector(minioService, messages);
         pathSelector.setBucket(selectedBucket.getName());
-        pathSelector.setSelectedPath(inferDefaultPath());
+        pathSelector.setSelectedPathAndExpand(targetPath);
 
         // 说明文字
         Span infoText = new Span(msg("minioBrowserView.uploadFolderInfoText"));
@@ -1434,8 +1481,8 @@ public class MinioBrowserView extends StandardView {
                 // 统一路径分隔符
                 fileName = fileName.replace("\\", "/");
 
-                String targetPath = pathSelector.getSelectedPath();
-                String objectPath = targetPath + fileName;
+                String selectedPath = pathSelector.getSelectedPath();
+                String objectPath = selectedPath + fileName;
 
                 // 确保所有父文件夹存在
                 ensureParentFolders(selectedBucket.getName(), objectPath, createdFolders);
@@ -1468,7 +1515,7 @@ public class MinioBrowserView extends StandardView {
 
         // 文件上传被拒绝
         upload.addFileRejectedListener(event -> {
-            showNotification(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()));
         });
 
         // 所有文件上传完成
@@ -1479,10 +1526,9 @@ public class MinioBrowserView extends StandardView {
             dialog.close();
 
             if (failed > 0) {
-                showNotification(String.format(msg("minioBrowserView.uploadPartial"), success, failed),
-                        NotificationVariant.LUMO_WARNING);
+                NotificationUtil.warning(String.format(msg("minioBrowserView.uploadPartial"), success, failed));
             } else {
-                showNotification(String.format(msg("minioBrowserView.uploadComplete"), success), NotificationVariant.LUMO_SUCCESS);
+                NotificationUtil.success(String.format(msg("minioBrowserView.uploadComplete"), success));
             }
         });
 
@@ -1637,11 +1683,10 @@ public class MinioBrowserView extends StandardView {
                     removeNodeFromTree(item);
                 }
 
-                showNotification(String.format(msg("minioBrowserView.filesDeleted"),
-                        result.getDeletedFiles(), result.getDeletedFolders()),
-                        NotificationVariant.LUMO_SUCCESS);
+                NotificationUtil.success(String.format(msg("minioBrowserView.filesDeleted"),
+                        result.getDeletedFiles(), result.getDeletedFolders()));
             } catch (Exception ex) {
-                showNotification(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+                NotificationUtil.error(String.format(msg("minioBrowserView.deleteFailed"), ex.getMessage()));
             }
         });
         deleteButton.addThemeVariants(ButtonVariant.LUMO_PRIMARY, ButtonVariant.LUMO_ERROR);
@@ -1779,7 +1824,7 @@ public class MinioBrowserView extends StandardView {
             if (keyword.length() >= 2 && selectedBucket != null) {
                 performSearch(keyword);
             } else if (keyword.length() < 2 && selectedBucket != null) {
-                showNotification(msg("minioBrowserView.searchMinLength"), NotificationVariant.LUMO_WARNING);
+                NotificationUtil.warning(msg("minioBrowserView.searchMinLength"));
             }
         });
     }
@@ -1916,7 +1961,7 @@ public class MinioBrowserView extends StandardView {
             searchDialog.getFooter().getElement().getStyle().set("display", result.isHasMore() ? "" : "none");
 
         } catch (Exception e) {
-            showNotification(String.format(msg("minioBrowserView.searchFailed"), e.getMessage()), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(String.format(msg("minioBrowserView.searchFailed"), e.getMessage()));
         }
     }
 
@@ -1951,7 +1996,7 @@ public class MinioBrowserView extends StandardView {
 
         if (folderNode == null) {
             // 文件夹节点不存在，可能需要先加载
-            showNotification(String.format(msg("minioBrowserView.cannotLocate"), folderPath), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(String.format(msg("minioBrowserView.cannotLocate"), folderPath));
             return;
         }
 
@@ -2012,7 +2057,7 @@ public class MinioBrowserView extends StandardView {
         // 确保 targetItem 在 pathToNodeMap 中
         MinioTreeNode nodeToSelect = pathToNodeMap.get(targetItem.getPath());
         if (nodeToSelect == null) {
-            showNotification(String.format(msg("minioBrowserView.fileNotFound"), targetItem.getName()), NotificationVariant.LUMO_WARNING);
+            NotificationUtil.warning(String.format(msg("minioBrowserView.fileNotFound"), targetItem.getName()));
             return;
         }
 
@@ -2028,7 +2073,7 @@ public class MinioBrowserView extends StandardView {
             null
         );
 
-        showNotification(String.format(msg("minioBrowserView.located"), targetItem.getName()), NotificationVariant.LUMO_SUCCESS);
+        NotificationUtil.success(String.format(msg("minioBrowserView.located"), targetItem.getName()));
     }
 
     /**
@@ -2111,7 +2156,7 @@ public class MinioBrowserView extends StandardView {
             });
 
         } catch (Exception ex) {
-            showNotification(String.format(msg("minioBrowserView.downloadFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(String.format(msg("minioBrowserView.downloadFailed"), ex.getMessage()));
         }
     }
 
@@ -2140,7 +2185,7 @@ public class MinioBrowserView extends StandardView {
                 // 遍历所有选中项，添加到 ZIP
                 for (MinioTreeNode item : items) {
                     if (item.getType() == NodeType.FILE) {
-                        // 使用完整路径作为 entry 名称，确保唯一性
+                        // 文件保留完整路径
                         String entryName = getUniqueEntryName(item.getPath(), usedEntryNames);
                         addFileToZip(zipOut, item, entryName);
                     } else if (item.getType() == NodeType.FOLDER) {
@@ -2179,7 +2224,7 @@ public class MinioBrowserView extends StandardView {
             });
 
         } catch (Exception ex) {
-            showNotification(String.format(msg("minioBrowserView.downloadFailed"), ex.getMessage()), NotificationVariant.LUMO_ERROR);
+            NotificationUtil.error(String.format(msg("minioBrowserView.downloadFailed"), ex.getMessage()));
         }
     }
 
@@ -2207,6 +2252,7 @@ public class MinioBrowserView extends StandardView {
         List<String> objectPaths = minioService.listFolderObjectPaths(bucket, folderPath);
 
         for (String objectName : objectPaths) {
+            // 保留完整路径
             String entryName = getUniqueEntryName(objectName, usedEntryNames);
 
             ZipEntry entry = new ZipEntry(entryName);

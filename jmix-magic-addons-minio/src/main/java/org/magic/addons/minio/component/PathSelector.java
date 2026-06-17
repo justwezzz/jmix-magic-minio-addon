@@ -56,10 +56,16 @@ public class PathSelector extends Composite<VerticalLayout> {
         layout.setSpacing(true);
         layout.setWidthFull();
 
-        // 面包屑和返回根目录按钮
+        // 面包屑（宽度铺满，超出显示省略号）
         breadcrumb = new Span(msg("pathSelector.currentPathRoot"));
         breadcrumb.getElement().getThemeList().add("badge contrast");
+        breadcrumb.getStyle().set("overflow", "hidden");
+        breadcrumb.getStyle().set("text-overflow", "ellipsis");
+        breadcrumb.getStyle().set("white-space", "nowrap");
+        breadcrumb.getStyle().set("display", "block");
+        breadcrumb.setWidthFull();
 
+        // 根目录按钮（居左，不伸缩）
         rootButton = new Button(msg("pathSelector.root"), VaadinIcon.HOME.create(), e -> {
             selectedPath = "";
             treeGrid.deselectAll();
@@ -67,9 +73,13 @@ public class PathSelector extends Composite<VerticalLayout> {
         });
         rootButton.addThemeVariants(ButtonVariant.LUMO_SMALL, ButtonVariant.LUMO_TERTIARY);
 
-        HorizontalLayout headerLayout = new HorizontalLayout(breadcrumb, rootButton);
+        // 水平布局：根目录按钮居左，面包屑铺满剩余空间
+        HorizontalLayout headerLayout = new HorizontalLayout(rootButton, breadcrumb);
         headerLayout.setAlignItems(com.vaadin.flow.component.orderedlayout.FlexComponent.Alignment.CENTER);
         headerLayout.setSpacing(true);
+        headerLayout.setWidthFull();
+        headerLayout.setFlexGrow(1, breadcrumb);  // 面包屑铺满剩余空间
+        headerLayout.setFlexGrow(0, rootButton);  // 按钮不伸缩
 
         // 文件夹树
         treeGrid = createTreeGrid();
@@ -157,31 +167,25 @@ public class PathSelector extends Composite<VerticalLayout> {
     private void updateBreadcrumb() {
         if (selectedPath == null || selectedPath.isEmpty()) {
             breadcrumb.setText(msg("pathSelector.currentPathRoot"));
+            breadcrumb.getElement().removeAttribute("title");
             return;
         }
 
-        // 解析路径层级
-        String[] parts = selectedPath.replace("/", " ").trim().split("\\s+");
-        StringBuilder display = new StringBuilder(msg("pathSelector.currentPathPrefix"));
+        // 显示完整路径，开头加 / 表示从根目录开始，CSS 自动处理省略
+        String display = msg("pathSelector.currentPathPrefix") + " /" + selectedPath;
+        breadcrumb.setText(display);
 
-        if (parts.length <= 3) {
-            // 3级以内完整显示
-            for (String part : parts) {
-                if (!part.isEmpty()) {
-                    display.append(part).append(" / ");
-                }
-            }
-        } else {
-            // 超过3级省略前面
-            display.append("... / ");
-            for (int i = parts.length - 2; i < parts.length; i++) {
-                if (!parts[i].isEmpty()) {
-                    display.append(parts[i]).append(" / ");
-                }
-            }
-        }
-
-        breadcrumb.setText(display.toString());
+        // 用 JS 检测是否被截断，如果是则设置 tooltip
+        breadcrumb.getElement().executeJs(
+                "var el = this;" +
+                "setTimeout(function() {" +
+                "  if (el.scrollWidth > el.clientWidth) {" +
+                "    el.title = el.textContent;" +
+                "  } else {" +
+                "    el.removeAttribute('title');" +
+                "  }" +
+                "}, 0);"
+        );
     }
 
     // 公共 API
@@ -195,6 +199,98 @@ public class PathSelector extends Composite<VerticalLayout> {
         if (breadcrumb != null) {
             updateBreadcrumb();
         }
+    }
+
+    /**
+     * 设置路径并展开选中对应的节点
+     * @param path 目标路径（如 "folder1/folder2"）
+     */
+    public void setSelectedPathAndExpand(String path) {
+        this.selectedPath = path != null ? path : "";
+        if (breadcrumb != null) {
+            updateBreadcrumb();
+        }
+
+        // 如果路径为空，不选中任何节点
+        if (selectedPath.isEmpty()) {
+            if (treeGrid != null) {
+                treeGrid.deselectAll();
+            }
+            return;
+        }
+
+        // 确保 TreeGrid 已初始化
+        if (treeGrid == null || treeData == null) {
+            return;
+        }
+
+        // 展开路径并选中目标节点
+        expandAndSelectPath(selectedPath);
+    }
+
+    /**
+     * 展开路径并选中目标节点
+     */
+    private void expandAndSelectPath(String targetPath) {
+        // 解析路径层级（如 "folder1/folder2" -> ["folder1", "folder2"]）
+        String[] parts = targetPath.split("/");
+        if (parts.length == 0) {
+            return;
+        }
+
+        // 逐层展开并查找节点
+        MinioTreeNode currentNode = null;
+        StringBuilder currentPath = new StringBuilder();
+
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i];
+            if (part.isEmpty()) continue;
+
+            currentPath.append(part);
+
+            // 查找当前层级的节点
+            MinioTreeNode found = findNodeByPath(currentNode, currentPath.toString());
+            if (found == null) {
+                // 节点未找到，可能是懒加载未完成，尝试加载
+                if (currentNode != null) {
+                    loadChildren(currentNode);
+                    found = findNodeByPath(currentNode, currentPath.toString());
+                }
+                if (found == null) {
+                    break; // 实在找不到，放弃
+                }
+            }
+
+            currentNode = found;
+
+            // 如果不是最后一层，展开该节点
+            if (i < parts.length - 1) {
+                treeGrid.expand(currentNode);
+                currentPath.append("/");
+            }
+        }
+
+        // 选中最终节点
+        if (currentNode != null && currentNode.getPath().equals(targetPath)) {
+            treeGrid.select(currentNode);
+            treeGrid.expand(currentNode);
+        }
+    }
+
+    /**
+     * 在指定父节点下查找指定路径的子节点
+     */
+    private MinioTreeNode findNodeByPath(MinioTreeNode parent, String path) {
+        List<MinioTreeNode> children = parent == null
+                ? treeData.getRootItems()
+                : treeData.getChildren(parent);
+
+        for (MinioTreeNode child : children) {
+            if (child.getPath().equals(path)) {
+                return child;
+            }
+        }
+        return null;
     }
 
     public void setBucket(String bucket) {
