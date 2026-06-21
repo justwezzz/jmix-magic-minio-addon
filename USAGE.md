@@ -248,7 +248,8 @@ PagedSearchResult result = minioService.searchPaged("my-bucket", "report", null,
 ### 搜索
 
 - 输入关键字回车搜索（至少 2 字符）
-- 分页加载（每页 50 条，"加载更多"按钮）
+- **游标分页懒加载**：滚动到底自动加载下一页（每页 50 条），无需手动点「加载更多」；基于 core addon 的 `CursorLazyGrid`，异步加载不卡 UI
+- **关键字高亮**：搜索结果文件名中匹配关键字的片段以 `<mark>` 高亮（不区分大小写）
 - 双击搜索结果定位到文件树（自动展开 + 滚动到目标）
 
 ### 批量操作
@@ -304,7 +305,7 @@ public interface MinioUserRole {
 | `org.magic.jmix.addons.minio.view/minioBrowserView.deselectAllBtn` | 取消全选按钮 |
 | `org.magic.jmix.addons.minio.view/minioBrowserView.selectFolderContents` | 全选目录下文件 |
 | `org.magic.jmix.addons.minio.view/minioBrowserView.searchDialogTitle` | 搜索对话框标题 |
-| `org.magic.jmix.addons.minio.view/minioBrowserView.searchLoadMore` | 加载更多 |
+| `org.magic.jmix.addons.minio.view/minioBrowserView.searchResultTitle` | 搜索结果标题（`搜索结果: "%s" (已加载 %d 条)`） |
 
 ### 覆盖示例
 

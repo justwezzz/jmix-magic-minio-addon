@@ -24,7 +24,10 @@ import org.magic.jmix.addons.minio.dto.NodeType;
 import org.magic.jmix.addons.minio.dto.PagedSearchResult;
 import org.magic.jmix.addons.minio.service.MinioService;
 import org.magic.jmix.addons.core.notification.NotificationUtil;
-import org.magic.jmix.addons.core.treegrid.TreeGridScrollHelper;
+import org.magic.jmix.addons.core.component.TreeGridScrollHelper;
+import org.magic.jmix.addons.core.component.CursorLazyGrid;
+import org.magic.jmix.addons.core.component.CursorPagedDataProvider;
+import org.magic.jmix.addons.core.component.CursorPage;
 import com.vaadin.flow.component.Component;
 import com.vaadin.flow.component.Html;
 import com.vaadin.flow.component.UI;
@@ -49,6 +52,7 @@ import com.vaadin.flow.server.streams.UploadHandler;
 import com.vaadin.flow.data.provider.hierarchy.TreeData;
 import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
 import com.vaadin.flow.data.renderer.ComponentRenderer;
+import com.vaadin.flow.data.renderer.LitRenderer;
 import com.vaadin.flow.server.streams.DownloadHandler;
 import com.vaadin.flow.server.streams.DownloadResponse;
 import org.slf4j.Logger;
@@ -64,6 +68,8 @@ import io.jmix.flowui.kit.component.codeeditor.CodeEditorMode;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import java.time.LocalDateTime;
@@ -78,6 +84,10 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -89,6 +99,8 @@ public class MinioBrowserView extends StandardView {
 
     private static final Logger log = LoggerFactory.getLogger(MinioBrowserView.class);
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    /** 游标分页搜索：每页条数（对齐 minioService.searchPaged） */
+    private static final int SEARCH_PAGE_SIZE = 50;
 
     @Autowired
     private MinioService minioService;
@@ -144,11 +156,12 @@ public class MinioBrowserView extends StandardView {
     // 搜索相关字段
     private Dialog searchDialog;
     private Grid<MinioTreeNode> searchResultGrid;
-    private String searchCursor;
     private String currentSearchKeyword;
-    private List<MinioTreeNode> searchResults;
-    private Button loadMoreButton;
     private boolean searchDialogMaximized = false;
+
+    // 游标分页搜索：provider 引用 + View 级 Executor（生命周期长于 Dialog 内的 Grid，避免 Dialog close 误杀）
+    private CursorPagedDataProvider<MinioTreeNode> searchDataProvider;
+    private ExecutorService searchExecutor;
 
     @ViewComponent
     private GridMenuItem<MinioTreeNode> selectFolderContentsItem;
@@ -208,6 +221,9 @@ public class MinioBrowserView extends StandardView {
         initCtrlLinkHover();
 
         loadBuckets();
+
+        // View 销毁时关闭游标分页线程池（生命周期绑定 View，而非 Dialog 内的 Grid）—— 对照 FileStorageBrowseView
+        addDetachListener(detachEvent -> shutdownSearchExecutor());
     }
 
     /**
@@ -1830,20 +1846,19 @@ public class MinioBrowserView extends StandardView {
     }
 
     private void performSearch(String keyword) {
-        // 每次都重新搜索（不做关键词相同判断）
         currentSearchKeyword = keyword;
-        searchCursor = null;
-        searchResults = new ArrayList<>();
-        searchDialogMaximized = false;
 
         // 创建搜索结果对话框
         if (searchDialog == null) {
             initSearchDialog();
         }
 
-        // 加载第一页结果
-        loadMoreSearchResults();
-
+        // 切换关键词：重置 provider（清空游标缓存、重新加载第一页）
+        if (searchDataProvider != null) {
+            searchDataProvider.reset();
+        }
+        // 初始标题（已加载 0 条），后续随翻页由 itemCount 监听更新
+        searchDialog.setHeaderTitle(String.format(msg("minioBrowserView.searchResultTitle"), keyword, 0));
         searchDialog.open();
     }
 
@@ -1884,8 +1899,8 @@ public class MinioBrowserView extends StandardView {
         searchResultGrid = new Grid<>();
         searchResultGrid.setSizeFull();
 
-        // 文件名列（省略号 + tooltip）
-        searchResultGrid.addComponentColumn(node -> createEllipsisCell(node.getName()))
+        // 文件名列：LitRenderer 高亮匹配关键字（不区分大小写、<mark>），保留省略号/tooltip
+        searchResultGrid.addColumn(createHighlightedNameRenderer())
             .setHeader(msg("minioBrowserView.columnFileName")).setFlexGrow(1).setResizable(true);
 
         // 路径列（省略号 + tooltip）
@@ -1909,11 +1924,130 @@ public class MinioBrowserView extends StandardView {
             navigateToItem(item);
         });
 
-        // 加载更多按钮（footer）
-        loadMoreButton = new Button(msg("minioBrowserView.searchLoadMore"), e -> loadMoreSearchResults());
-        searchDialog.getFooter().add(loadMoreButton);
+        // 接入 CursorLazyGrid（游标分页懒加载，替代「加载更多」按钮）
+        // 传 View 级 Executor：Dialog close 会使 Grid detach，组件自建 Executor 会随之 shutdown 导致二次搜索失败；
+        // 改由 View 持有 Executor（生命周期长于 Dialog 内 Grid），View detach 时统一关闭。—— 对照 FileStorageBrowseView
+        if (searchExecutor == null) {
+            searchExecutor = createSearchExecutor();
+        }
+        searchDataProvider = CursorLazyGrid.install(searchResultGrid, this::fetchSearchPage)
+                .pageSize(SEARCH_PAGE_SIZE)
+                .executor(searchExecutor)
+                .apply();
+
+        // 已加载条数变化时更新标题（总数未知，显示「已加载 N 条」）
+        searchResultGrid.getGenericDataView().addItemCountChangeListener(event ->
+                updateSearchTitle(searchDataProvider.getLoadedCount()));
 
         searchDialog.add(searchResultGrid);
+    }
+
+    /**
+     * 更新搜索对话框标题：搜索结果: "keyword" (已加载 N 条)。
+     */
+    private void updateSearchTitle(int loadedCount) {
+        if (currentSearchKeyword == null) {
+            return;
+        }
+        searchDialog.setHeaderTitle(
+                String.format(msg("minioBrowserView.searchResultTitle"), currentSearchKeyword, loadedCount));
+    }
+
+    /**
+     * 游标分页 fetcher：包一层 minioService.searchPaged（真游标），返回 CursorPage。
+     * 在后台 executor 线程执行，异常捕获后回 UI 线程通知。
+     */
+    private CursorPage<MinioTreeNode> fetchSearchPage(String cursor) {
+        if (selectedBucket == null || currentSearchKeyword == null) {
+            return CursorPage.of(new ArrayList<>(), null, false);
+        }
+        try {
+            PagedSearchResult result = minioService.searchPaged(
+                    selectedBucket.getName(),
+                    currentSearchKeyword,
+                    cursor,
+                    SEARCH_PAGE_SIZE);
+            return CursorPage.of(result.getItems(), result.getNextCursor(), result.isHasMore());
+        } catch (Exception e) {
+            log.error("游标分页搜索失败: bucket={}, keyword={}", selectedBucket.getName(), currentSearchKeyword, e);
+            // 后台线程：回 UI 线程显示错误通知
+            UI currentUi = UI.getCurrent();
+            if (currentUi != null) {
+                String failedMsg = String.format(msg("minioBrowserView.searchFailed"), e.getMessage());
+                currentUi.access(() -> NotificationUtil.error(failedMsg));
+            }
+            return CursorPage.of(new ArrayList<>(), null, false);
+        }
+    }
+
+    /**
+     * 文件名列渲染器：LitRenderer 高亮匹配关键字的片段（不区分大小写、第一处匹配），
+     * 保留省略号与 tooltip。文件名拆为「前段/匹配段/后段」三个属性，
+     * 模板对匹配段硬编码 <mark>（三段经 ${item.xxx} 各自转义，防 XSS）。—— 对照 FileStorageBrowseView
+     */
+    private LitRenderer<MinioTreeNode> createHighlightedNameRenderer() {
+        return LitRenderer.<MinioTreeNode>of("""
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block"
+                      title="${item.name}"
+                      @mouseenter="this.title=(this.scrollWidth>this.clientWidth)?this.textContent:''">
+                  ${item.before}<mark>${item.match}</mark>${item.after}
+                </span>
+                """)
+                .withProperty("name", node -> node.getName() == null ? "" : node.getName())
+                .withProperty("before", node -> highlightSegments(node.getName()).before())
+                .withProperty("match", node -> highlightSegments(node.getName()).match())
+                .withProperty("after", node -> highlightSegments(node.getName()).after());
+    }
+
+    /**
+     * 文件名按当前搜索关键字拆分：第一处匹配段 + 前段 + 后段（不区分大小写）。
+     */
+    private NameSegments highlightSegments(String name) {
+        if (name == null || currentSearchKeyword == null || currentSearchKeyword.isEmpty()) {
+            return new NameSegments(name == null ? "" : name, "", "");
+        }
+        int pos = name.toLowerCase().indexOf(currentSearchKeyword.toLowerCase());
+        if (pos < 0) {
+            return new NameSegments(name, "", "");
+        }
+        int end = pos + currentSearchKeyword.length();
+        return new NameSegments(name.substring(0, pos), name.substring(pos, end), name.substring(end));
+    }
+
+    /** 文件名拆分段：前段 / 匹配段 / 后段。 */
+    private record NameSegments(String before, String match, String after) {
+    }
+
+    /**
+     * 创建游标分页线程池（守护线程，View 级生命周期）。
+     */
+    private ExecutorService createSearchExecutor() {
+        AtomicInteger counter = new AtomicInteger();
+        ThreadFactory threadFactory = runnable -> {
+            Thread thread = new Thread(runnable, "minio-search-cursor-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+        return Executors.newCachedThreadPool(threadFactory);
+    }
+
+    /**
+     * 关闭游标分页线程池（View detach 时调用）。
+     */
+    private void shutdownSearchExecutor() {
+        if (searchExecutor == null) {
+            return;
+        }
+        searchExecutor.shutdown();
+        try {
+            if (!searchExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                searchExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            searchExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        log.debug("minio-search-cursor executor shutdown");
     }
 
     /**
@@ -1929,40 +2063,6 @@ public class MinioBrowserView extends StandardView {
             "var el=this;el.addEventListener('mouseenter',function(){" +
             "el.title=(el.scrollWidth>el.clientWidth)?el.textContent:'';});");
         return span;
-    }
-
-    private void loadMoreSearchResults() {
-        if (selectedBucket == null || currentSearchKeyword == null) {
-            return;
-        }
-
-        try {
-            PagedSearchResult result = minioService.searchPaged(
-                selectedBucket.getName(),
-                currentSearchKeyword,
-                searchCursor,
-                50
-            );
-
-            searchResults.addAll(result.getItems());
-            searchResultGrid.setItems(searchResults);
-            searchCursor = result.getNextCursor();
-
-            // 更新对话框标题
-            String title = String.format(msg("minioBrowserView.searchResultTitle"),
-                currentSearchKeyword, searchResults.size());
-            if (result.isHasMore()) {
-                title += msg("minioBrowserView.searchResultHasMore");
-            }
-            searchDialog.setHeaderTitle(title);
-
-            // 更新加载更多按钮状态
-            loadMoreButton.setVisible(result.isHasMore());
-            searchDialog.getFooter().getElement().getStyle().set("display", result.isHasMore() ? "" : "none");
-
-        } catch (Exception e) {
-            NotificationUtil.error(String.format(msg("minioBrowserView.searchFailed"), e.getMessage()));
-        }
     }
 
     private void navigateToItem(MinioTreeNode item) {
