@@ -153,6 +153,12 @@ public class MinioBrowserView extends StandardView {
     private TreeDataProvider<MinioTreeNode> treeDataProvider;
     private Map<String, MinioTreeNode> pathToNodeMap;  // 用于快速查找节点
 
+    // 异步懒加载生命周期管理：
+    // treeGeneration —— treeData 每次重建（切 bucket/刷新/清空）递增，回调据此丢弃过期结果；
+    // loadingPaths   —— 正在加载的 path 集合，防止同一文件夹重复展开触发并发任务。
+    private long treeGeneration = 0;
+    private final Set<String> loadingPaths = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     // 搜索相关字段
     private Dialog searchDialog;
     private Grid<MinioTreeNode> searchResultGrid;
@@ -406,7 +412,9 @@ public class MinioBrowserView extends StandardView {
     private void loadFileTreeData() {
         if (selectedBucket == null) return;
 
-        // 创建新的 TreeData
+        // 创建新的 TreeData（代际递增：使此前发起的异步加载回调全部过期失效）
+        treeGeneration++;
+        loadingPaths.clear();
         treeData = new TreeData<>();
         pathToNodeMap = new HashMap<>();
 
@@ -451,7 +459,9 @@ public class MinioBrowserView extends StandardView {
     }
 
     /**
-     * 文件夹展开时的懒加载
+     * 文件夹展开时的懒加载（异步）。
+     * 展开时占位符「加载中...」立即显示（RPC 即刻返回），真实数据由后台线程拉取，
+     * 完成后回 UI 线程填充——避免同步阻塞导致加载期间只能看到 Vaadin 全局进度条。
      */
     private void onFolderExpand(MinioTreeNode folder) {
         if (folder.getType() != NodeType.FOLDER) return;
@@ -467,27 +477,94 @@ public class MinioBrowserView extends StandardView {
             return;
         }
 
-        // 移除占位符节点（同步清理 pathToNodeMap，对齐 loadFolderChildren）
-        treeData.removeItem(firstChild);
-        pathToNodeMap.remove(firstChild.getPath());
-
-        // 加载真实的子节点
-        List<MinioTreeNode> subItems = minioService.listObjects(folder.getBucket(), folder.getPath());
-
-        for (MinioTreeNode node : subItems) {
-            pathToNodeMap.put(node.getPath(), node);
-            treeData.addItem(folder, node);
-
-            // 如果子节点也是文件夹，添加占位符
-            if (node.getType() == NodeType.FOLDER) {
-                addPlaceholderChild(node);
-            }
+        // 防重入：同一文件夹加载中再次展开，跳过（add 返回 false 表示已在集合中）
+        if (!loadingPaths.add(folder.getPath())) {
+            return;
         }
 
-        // 刷新数据
-        treeDataProvider.refreshAll();
-        // 展开懒加载后已加载统计已变化，刷新状态栏
-        updateStats();
+        // 占位符先保留（加载期间显示「加载中...」），后台拉取真实数据
+        final MinioTreeNode placeholder = firstChild;
+        final String bucket = folder.getBucket();
+        final String path = folder.getPath();
+        final UI ui = UI.getCurrent();  // 在 UI 线程捕获，供后台线程回调
+        final long gen = treeGeneration;  // 捕获当前代际，回调时据此判断 treeData 是否已重建
+        final ExecutorService executor = getSearchExecutor();  // 复用 View 级线程池
+
+        try {
+            executor.execute(() -> {
+                List<MinioTreeNode> subItems;
+                try {
+                    subItems = minioService.listObjects(bucket, path);
+                } catch (Exception e) {
+                    log.error("异步加载文件夹失败: bucket={}, path={}", bucket, path, e);
+                    return;
+                } finally {
+                    // 无论成功失败，回到 UI 线程清理加载标记
+                    if (ui != null) {
+                        ui.access(() -> loadingPaths.remove(path));
+                    } else {
+                        loadingPaths.remove(path);
+                    }
+                }
+                if (ui == null) {
+                    return;
+                }
+                ui.access(() -> applyExpandResult(folder, placeholder, subItems, gen, bucket, path));
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // View 已 detach、executor 已 shutdown：静默丢弃，并清理加载标记
+            loadingPaths.remove(path);
+            log.debug("异步加载被拒绝（executor 已关闭）: bucket={}, path={}", bucket, path);
+        }
+    }
+
+    /**
+     * 将异步加载结果写回树（在 UI 线程执行）。
+     * 三层过期校验：代际、节点身份、占位符存在性，任一不满足即丢弃，避免污染已变化的 UI 状态。
+     */
+    private void applyExpandResult(MinioTreeNode folder, MinioTreeNode placeholder,
+                                   List<MinioTreeNode> subItems, long gen, String bucket, String path) {
+        try {
+            // ① 代际校验：treeData 已重建（切 bucket/刷新/清空），整个回调作废
+            if (gen != treeGeneration) {
+                log.debug("异步加载回调过期（代际不匹配）: bucket={}, path={}", bucket, path);
+                return;
+            }
+            // ② 节点身份校验：folder 仍是当前 treeData 里那个节点（未被删除/替换）。
+            //    用 pathToNodeMap.get + == 比较：Map 查询不抛异常，比 getChildren 安全。
+            if (pathToNodeMap.get(folder.getPath()) != folder) {
+                log.debug("异步加载回调过期（节点已失效）: bucket={}, path={}", bucket, path);
+                return;
+            }
+            // ③ 占位符校验：folder 仍在树中（②通过即保证 getChildren 安全），占位符还在才写入
+            if (!treeData.getChildren(folder).contains(placeholder)) {
+                log.debug("异步加载回调过期（占位符已不在）: bucket={}, path={}", bucket, path);
+                return;
+            }
+
+            // 移除占位符节点（同步清理 pathToNodeMap，对齐 loadFolderChildren）
+            treeData.removeItem(placeholder);
+            pathToNodeMap.remove(placeholder.getPath());
+
+            for (MinioTreeNode node : subItems) {
+                pathToNodeMap.put(node.getPath(), node);
+                treeData.addItem(folder, node);
+
+                // 如果子节点也是文件夹，添加占位符
+                if (node.getType() == NodeType.FOLDER) {
+                    addPlaceholderChild(node);
+                }
+            }
+
+            // 刷新数据
+            treeDataProvider.refreshAll();
+            // 展开懒加载后已加载统计已变化，刷新状态栏
+            updateStats();
+        } catch (IllegalArgumentException e) {
+            // 最后防线：理论上前三层已拦住所有「节点不在层级」的情况，
+            // 此处仅防御性兜底，保证 UI 状态绝不被回调破坏。
+            log.debug("异步加载回调防御性拦截: bucket={}, path={}", bucket, path);
+        }
     }
 
     /**
@@ -733,6 +810,8 @@ public class MinioBrowserView extends StandardView {
     }
 
     private void clearFileTree() {
+        treeGeneration++;
+        loadingPaths.clear();
         treeData = new TreeData<>();
         pathToNodeMap = new HashMap<>();
         treeDataProvider = new TreeDataProvider<>(treeData);
@@ -749,7 +828,7 @@ public class MinioBrowserView extends StandardView {
             NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
             return;
         }
-        showCreateFolderDialog();
+        showCreateFolderDialog(inferUploadTargetPath());
     }
 
     @Subscribe("deleteFilesAction")
@@ -1341,7 +1420,7 @@ public class MinioBrowserView extends StandardView {
         };
     }
 
-    private void showCreateFolderDialog() {
+    private void showCreateFolderDialog(String targetPath) {
         Dialog dialog = new Dialog();
         dialog.setHeaderTitle(msg("minioBrowserView.dialogCreateFolderTitle"));
         dialog.setWidth("500px");
@@ -1350,10 +1429,10 @@ public class MinioBrowserView extends StandardView {
         content.setPadding(false);
         content.setSpacing(true);
 
-        // 路径选择器
+        // 路径选择器（自动展开定位到 targetPath，对齐上传对话框）
         PathSelector pathSelector = new PathSelector(minioService, messages);
         pathSelector.setBucket(selectedBucket.getName());
-        pathSelector.setSelectedPath(inferDefaultPath());
+        pathSelector.setSelectedPathAndExpand(targetPath);
 
         // 文件夹名称输入
         TextField nameField = new TextField(msg("minioBrowserView.dialogFolderNameField"));
@@ -1369,8 +1448,8 @@ public class MinioBrowserView extends StandardView {
                 return;
             }
             try {
-                String targetPath = pathSelector.getSelectedPath();
-                String folderPath = targetPath + name + "/";
+                String selectedPath = pathSelector.getSelectedPath();
+                String folderPath = selectedPath + name + "/";
                 minioService.createFolder(selectedBucket.getName(), folderPath);
                 dialog.close();
 
@@ -1799,6 +1878,16 @@ public class MinioBrowserView extends StandardView {
     private void removeNodeFromTree(MinioTreeNode node) {
         if (treeData == null || pathToNodeMap == null) return;
 
+        // 占位符是 UI 占位（显示「加载中...」），非真实 MinIO 对象，禁止删除
+        // （防御用户在加载期间误选占位符删除，导致该文件夹变空）
+        if (node.getPath().endsWith(".placeholder")) {
+            return;
+        }
+        // 节点身份校验：已被删除 / treeData 已重建则跳过（占位符已被上一行拦截，此处 node 必在 map 中）
+        if (pathToNodeMap.get(node.getPath()) != node) {
+            return;
+        }
+
         // 递归清理子树：pathToNodeMap 条目 + Grid 选中状态
         // （treeData.removeItem 会递归删 TreeData 子孙，但 pathToNodeMap 和 selection 需手动同步，
         //   否则状态栏的「已加载」「选中」统计仍计入已删节点）
@@ -1822,13 +1911,20 @@ public class MinioBrowserView extends StandardView {
      * 递归清理节点及其已加载子孙的 pathToNodeMap 条目和 Grid 选中状态（删目录时子孙也要同步清理）。
      */
     private void removeSubtreeFromMapsAndSelection(MinioTreeNode node) {
-        // getChildren 返回不可变实时视图，拷贝后再遍历避免遍历中结构变更
-        List<MinioTreeNode> children = new ArrayList<>(treeData.getChildren(node));
+        // getChildren 在 node 已不在层级时（批量删父子时子先被父递归删除 / 异步加载移除占位符 /
+        // treeData 重建后残留引用）会抛 IllegalArgumentException。按空子树处理，继续清理 map/selection。
+        List<MinioTreeNode> children;
+        try {
+            // getChildren 返回不可变实时视图，拷贝后再遍历避免遍历中结构变更
+            children = new ArrayList<>(treeData.getChildren(node));
+        } catch (IllegalArgumentException e) {
+            children = java.util.Collections.emptyList();
+        }
         for (MinioTreeNode child : children) {
             removeSubtreeFromMapsAndSelection(child);
         }
-        pathToNodeMap.remove(node.getPath());
-        fileTreeGrid.deselect(node);
+        pathToNodeMap.remove(node.getPath());  // remove 不存在的 key 是 no-op，安全
+        fileTreeGrid.deselect(node);           // deselect 不存在的项也是 no-op，安全
     }
 
     // ==================== 搜索功能方法 ====================
@@ -1927,12 +2023,9 @@ public class MinioBrowserView extends StandardView {
         // 接入 CursorLazyGrid（游标分页懒加载，替代「加载更多」按钮）
         // 传 View 级 Executor：Dialog close 会使 Grid detach，组件自建 Executor 会随之 shutdown 导致二次搜索失败；
         // 改由 View 持有 Executor（生命周期长于 Dialog 内 Grid），View detach 时统一关闭。—— 对照 FileStorageBrowseView
-        if (searchExecutor == null) {
-            searchExecutor = createSearchExecutor();
-        }
         searchDataProvider = CursorLazyGrid.install(searchResultGrid, this::fetchSearchPage)
                 .pageSize(SEARCH_PAGE_SIZE)
-                .executor(searchExecutor)
+                .executor(getSearchExecutor())
                 .apply();
 
         // 已加载条数变化时更新标题（总数未知，显示「已加载 N 条」）
@@ -2029,6 +2122,16 @@ public class MinioBrowserView extends StandardView {
             return thread;
         };
         return Executors.newCachedThreadPool(threadFactory);
+    }
+
+    /**
+     * 获取 View 级线程池（懒加载），供游标分页搜索与文件夹异步懒加载复用。
+     */
+    private ExecutorService getSearchExecutor() {
+        if (searchExecutor == null) {
+            searchExecutor = createSearchExecutor();
+        }
+        return searchExecutor;
     }
 
     /**
