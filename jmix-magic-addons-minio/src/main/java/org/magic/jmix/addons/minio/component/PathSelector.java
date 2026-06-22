@@ -63,7 +63,8 @@ public class PathSelector extends Composite<VerticalLayout> {
         breadcrumb.getStyle().set("text-overflow", "ellipsis");
         breadcrumb.getStyle().set("white-space", "nowrap");
         breadcrumb.getStyle().set("display", "block");
-        breadcrumb.setWidthFull();
+        // 设置最小宽度，避免被挤压成 0
+        breadcrumb.setMinWidth("50px");
 
         // 根目录按钮（居左，不伸缩）
         rootButton = new Button(msg("pathSelector.root"), VaadinIcon.HOME.create(), e -> {
@@ -80,6 +81,9 @@ public class PathSelector extends Composite<VerticalLayout> {
         headerLayout.setWidthFull();
         headerLayout.setFlexGrow(1, breadcrumb);  // 面包屑铺满剩余空间
         headerLayout.setFlexGrow(0, rootButton);  // 按钮不伸缩
+        // 防止内容溢出
+        headerLayout.getStyle().set("overflow", "hidden");
+        headerLayout.setMinWidth("0");
 
         // 文件夹树
         treeGrid = createTreeGrid();

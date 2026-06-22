@@ -1795,6 +1795,11 @@ public class MinioBrowserView extends StandardView {
         pathSelector.setBucket(selectedBucket.getName());
         pathSelector.setSelectedPathAndExpand(targetPath);
 
+        // 计数器：追踪上传成功/失败数量
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger failCount = new AtomicInteger(0);
+        List<String> uploadedFiles = new ArrayList<>();
+
         // 使用 Vaadin Upload 组件
         UploadHandler handler = UploadHandler.inMemory((metadata, data) -> {
             String fileName = metadata.fileName();
@@ -1808,7 +1813,10 @@ public class MinioBrowserView extends StandardView {
                         new ByteArrayInputStream(data),
                         contentLength
                 );
-                dialog.close();
+
+                // 记录成功
+                successCount.incrementAndGet();
+                uploadedFiles.add(fileName);
 
                 // 增量添加节点到树
                 MinioTreeNode newNode = MinioTreeNode.builder()
@@ -1821,20 +1829,33 @@ public class MinioBrowserView extends StandardView {
                         .lastModified(LocalDateTime.now())
                         .build();
                 addNodeToTree(newNode);
-
-                NotificationUtil.success(String.format(msg("minioBrowserView.fileUploaded"), fileName));
             } catch (Exception ex) {
-                NotificationUtil.error(String.format(msg("minioBrowserView.uploadFailed"), ex.getMessage()));
+                failCount.incrementAndGet();
+                NotificationUtil.error(String.format(msg("minioBrowserView.uploadFailed"), fileName + ": " + ex.getMessage()));
             }
         });
 
         Upload upload = new Upload(handler);
-        upload.setMaxFiles(1);
+        upload.setMaxFiles(50); // 支持多文件上传
         upload.setWidthFull();
         upload.setI18n(createUploadI18n());
 
         upload.addFileRejectedListener(event -> {
             NotificationUtil.error(String.format(msg("minioBrowserView.fileRejected"), event.getErrorMessage()));
+        });
+
+        // 所有文件上传完成后显示汇总通知
+        upload.addAllFinishedListener(e -> {
+            int success = successCount.get();
+            int fail = failCount.get();
+            if (success > 0 && fail == 0) {
+                NotificationUtil.success(String.format(msg("minioBrowserView.uploadComplete"), success));
+            } else if (success > 0 && fail > 0) {
+                NotificationUtil.warning(String.format(msg("minioBrowserView.uploadPartial"), success, fail));
+            }
+            // 重置计数器
+            successCount.set(0);
+            failCount.set(0);
         });
 
         content.add(pathSelector, upload);
