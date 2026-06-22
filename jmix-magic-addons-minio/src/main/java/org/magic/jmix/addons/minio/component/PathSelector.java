@@ -5,6 +5,7 @@ import org.magic.jmix.addons.minio.dto.MinioTreeNode;
 import org.magic.jmix.addons.minio.dto.NodeType;
 import org.magic.jmix.addons.minio.service.MinioService;
 import com.vaadin.flow.component.Composite;
+import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.html.Span;
@@ -14,8 +15,14 @@ import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.treegrid.TreeGrid;
 import com.vaadin.flow.data.provider.hierarchy.TreeData;
 import com.vaadin.flow.data.provider.hierarchy.TreeDataProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
 
 /**
@@ -24,6 +31,7 @@ import java.util.stream.Collectors;
  */
 public class PathSelector extends Composite<VerticalLayout> {
 
+    private static final Logger log = LoggerFactory.getLogger(PathSelector.class);
     private static final String MSG_PREFIX = "org.magic.jmix.addons.minio/";
 
     private final MinioService minioService;
@@ -39,6 +47,15 @@ public class PathSelector extends Composite<VerticalLayout> {
     // 状态
     private String bucket;
     private String selectedPath = "";
+
+    // 异步懒加载生命周期管理（对齐 MinioBrowserView）：
+    // generation —— treeData 每次清空（切 bucket / 重新加载）递增，回调据此丢弃过期结果；
+    // loadingPaths —— 正在加载的 path 集合，防止同一文件夹重复展开触发并发任务。
+    private long generation = 0;
+    private final java.util.Set<String> loadingPaths = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    // 组件级线程池（守护线程），懒加载，detach 时关闭
+    private ExecutorService loadExecutor;
 
     public PathSelector(MinioService minioService, Messages messages) {
         this.minioService = minioService;
@@ -63,8 +80,7 @@ public class PathSelector extends Composite<VerticalLayout> {
         breadcrumb.getStyle().set("text-overflow", "ellipsis");
         breadcrumb.getStyle().set("white-space", "nowrap");
         breadcrumb.getStyle().set("display", "block");
-        // 设置最小宽度，避免被挤压成 0
-        breadcrumb.setMinWidth("50px");
+        breadcrumb.getStyle().set("min-width", "0");
 
         // 根目录按钮（居左，不伸缩）
         rootButton = new Button(msg("pathSelector.root"), VaadinIcon.HOME.create(), e -> {
@@ -80,16 +96,19 @@ public class PathSelector extends Composite<VerticalLayout> {
         headerLayout.setSpacing(true);
         headerLayout.setWidthFull();
         headerLayout.setFlexGrow(1, breadcrumb);  // 面包屑铺满剩余空间
+        headerLayout.setFlexShrink(1, breadcrumb);  // 允许面包屑收缩，长路径时触发省略号而非撑破容器
         headerLayout.setFlexGrow(0, rootButton);  // 按钮不伸缩
-        // 防止内容溢出
-        headerLayout.getStyle().set("overflow", "hidden");
-        headerLayout.setMinWidth("0");
+        headerLayout.setFlexShrink(0, rootButton);  // 按钮不收缩，保持固有宽度
 
         // 文件夹树
         treeGrid = createTreeGrid();
         treeGrid.setHeight("300px");
 
         layout.add(headerLayout, treeGrid);
+
+        // 组件 detach（对话框关闭）时关闭线程池，避免线程泄漏
+        layout.addDetachListener(e -> shutdownLoadExecutor());
+
         return layout;
     }
 
@@ -122,7 +141,7 @@ public class PathSelector extends Composite<VerticalLayout> {
                 selectedPath = parent.getPath();
                 updateBreadcrumb();
 
-                loadChildren(parent);
+                loadChildrenAsync(parent);
             }
         });
 
@@ -145,17 +164,17 @@ public class PathSelector extends Composite<VerticalLayout> {
                 .filter(n -> n.getPath().endsWith(".placeholder"))
                 .collect(Collectors.toList());
 
-        // 移除占位符
-        for (MinioTreeNode placeholder : placeholders) {
-            treeData.removeItem(placeholder);
-        }
-
-        // 加载真实子文件夹
+        // 加载真实子文件夹（占位符先保留，加载期间显示「加载中...」提示）
         try {
             List<MinioTreeNode> subFolders = minioService.listObjects(bucket, parent.getPath())
                     .stream()
                     .filter(node -> node.getType() == NodeType.FOLDER)
                     .collect(Collectors.toList());
+
+            // 加载完成，移除占位符
+            for (MinioTreeNode placeholder : placeholders) {
+                treeData.removeItem(placeholder);
+            }
 
             for (MinioTreeNode folder : subFolders) {
                 treeData.addItem(parent, folder);
@@ -164,8 +183,143 @@ public class PathSelector extends Composite<VerticalLayout> {
 
             treeDataProvider.refreshAll();
         } catch (Exception e) {
-            // 加载失败
+            log.error("PathSelector 同步加载文件夹失败: bucket={}, path={}", bucket, parent.getPath(), e);
         }
+    }
+
+    /**
+     * 异步加载子文件夹（用户手动展开触发）。
+     * 占位符「加载中...」立即显示，真实数据由后台线程拉取，完成后回 UI 线程填充——
+     * 避免同步阻塞导致加载期间只能看到 Vaadin 全局进度条。
+     * 三层过期校验：代际、parent 仍在树中、占位符仍在，任一不满足即丢弃。
+     */
+    private void loadChildrenAsync(MinioTreeNode parent) {
+        // 检查是否已加载（没有占位符）
+        List<MinioTreeNode> children;
+        try {
+            children = treeData.getChildren(parent);
+        } catch (IllegalArgumentException e) {
+            return;  // parent 已不在层级，放弃
+        }
+        List<MinioTreeNode> placeholders = children.stream()
+                .filter(n -> n.getPath().endsWith(".placeholder"))
+                .collect(Collectors.toList());
+        if (placeholders.isEmpty()) {
+            return;  // 已加载，跳过
+        }
+
+        // 防重入：同一文件夹加载中再次展开，跳过
+        if (!loadingPaths.add(parent.getPath())) {
+            return;
+        }
+
+        final List<MinioTreeNode> placeholderList = placeholders;
+        final String path = parent.getPath();
+        final long gen = generation;
+        final UI ui = UI.getCurrent();
+        final ExecutorService executor = getLoadExecutor();
+
+        try {
+            executor.execute(() -> {
+                List<MinioTreeNode> subFolders;
+                try {
+                    subFolders = minioService.listObjects(bucket, path).stream()
+                            .filter(node -> node.getType() == NodeType.FOLDER)
+                            .collect(Collectors.toList());
+                } catch (Exception e) {
+                    log.error("PathSelector 异步加载文件夹失败: bucket={}, path={}", bucket, path, e);
+                    return;
+                } finally {
+                    if (ui != null) {
+                        ui.access(() -> loadingPaths.remove(path));
+                    } else {
+                        loadingPaths.remove(path);
+                    }
+                }
+                if (ui == null) {
+                    return;
+                }
+                ui.access(() -> applyAsyncLoadResult(parent, placeholderList, subFolders, gen, path));
+            });
+        } catch (RejectedExecutionException e) {
+            // 对话框已关闭、executor 已 shutdown：静默丢弃并清理加载标记
+            loadingPaths.remove(path);
+            log.debug("PathSelector 异步加载被拒绝（executor 已关闭）: path={}", path);
+        }
+    }
+
+    /**
+     * 将异步加载结果写回树（在 UI 线程执行）。
+     */
+    private void applyAsyncLoadResult(MinioTreeNode parent, List<MinioTreeNode> placeholders,
+                                      List<MinioTreeNode> subFolders, long gen, String path) {
+        try {
+            // ① 代际校验：treeData 已重建（切 bucket / 重新加载），整个回调作废
+            if (gen != generation) {
+                log.debug("PathSelector 异步加载回调过期（代际不匹配）: path={}", path);
+                return;
+            }
+            // ② parent 仍在树中：getChildren 抛异常说明 parent 已不在层级，丢弃
+            List<MinioTreeNode> currentChildren = treeData.getChildren(parent);
+            // ③ 占位符仍在：用户未做影响该层结构的操作
+            boolean anyPlaceholderLeft = currentChildren.stream()
+                    .anyMatch(c -> placeholders.contains(c));
+            if (!anyPlaceholderLeft) {
+                log.debug("PathSelector 异步加载回调过期（占位符已不在）: path={}", path);
+                return;
+            }
+
+            // 移除占位符
+            for (MinioTreeNode placeholder : placeholders) {
+                if (currentChildren.contains(placeholder)) {
+                    treeData.removeItem(placeholder);
+                }
+            }
+
+            for (MinioTreeNode folder : subFolders) {
+                treeData.addItem(parent, folder);
+                addPlaceholderChild(folder);
+            }
+
+            treeDataProvider.refreshAll();
+        } catch (IllegalArgumentException e) {
+            log.debug("PathSelector 异步加载回调防御性拦截: path={}", path);
+        }
+    }
+
+    /**
+     * 获取组件级线程池（懒加载，守护线程）。
+     */
+    private ExecutorService getLoadExecutor() {
+        if (loadExecutor == null) {
+            java.util.concurrent.atomic.AtomicInteger counter = new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.ThreadFactory factory = r -> {
+                Thread t = new Thread(r, "minio-pathselector-" + counter.incrementAndGet());
+                t.setDaemon(true);
+                return t;
+            };
+            loadExecutor = Executors.newCachedThreadPool(factory);
+        }
+        return loadExecutor;
+    }
+
+    /**
+     * 关闭组件级线程池（组件 detach 时调用）。
+     */
+    private void shutdownLoadExecutor() {
+        if (loadExecutor == null) {
+            return;
+        }
+        loadExecutor.shutdown();
+        try {
+            if (!loadExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                loadExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            loadExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        log.debug("minio-pathselector executor shutdown");
     }
 
     private void updateBreadcrumb() {
@@ -314,6 +468,9 @@ public class PathSelector extends Composite<VerticalLayout> {
             getContent();
         }
 
+        // 代际递增 + 清加载标记：使此前发起的异步加载回调全部过期失效
+        generation++;
+        loadingPaths.clear();
         treeData.clear();
         selectedPath = "";
         updateBreadcrumb();
@@ -335,7 +492,7 @@ public class PathSelector extends Composite<VerticalLayout> {
             treeDataProvider = new TreeDataProvider<>(treeData);
             treeGrid.setDataProvider(treeDataProvider);
         } catch (Exception e) {
-            // 加载失败时显示空树
+            log.error("PathSelector 加载根目录文件夹失败: bucket={}", bucket, e);
         }
     }
 

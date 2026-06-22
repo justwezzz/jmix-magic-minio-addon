@@ -83,7 +83,7 @@ public class MinioService {
      * 检测到 endpoint/accessKey/secretKey 变化时才重建，否则复用缓存实例。
      * OkHttp 内部维护连接池和调度器线程池，复用可避免资源浪费。
      */
-    private MinioClient getClient() {
+    private synchronized MinioClient getClient() {
         String endpoint = minioProperties.getEndpoint();
         String accessKey = minioProperties.getAccessKey();
         String secretKey = minioProperties.getSecretKey();
@@ -144,6 +144,38 @@ public class MinioService {
             return objectName.substring(lastSlash + 1);
         }
         return objectName;
+    }
+
+    /**
+     * 将 MinIO Item 统一构造为 MinioTreeNode。
+     * 处理文件夹/文件类型判断、名称提取（文件夹去掉末尾斜杠）、大小、修改时间（安全解析）。
+     * 供 listObjects / searchPaged 复用，避免构造逻辑重复。
+     */
+    private MinioTreeNode toTreeNode(String bucket, Item item) {
+        String objectName = item.objectName();
+        boolean isDir = item.isDir();
+
+        // 安全获取 lastModified（解析失败保持为 null，不中断列举）
+        LocalDateTime lastModified = null;
+        try {
+            if (item.lastModified() != null) {
+                lastModified = item.lastModified().toInstant()
+                        .atZone(ZoneId.systemDefault()).toLocalDateTime();
+            }
+        } catch (Exception e) {
+            log.debug("lastModified 解析失败，保持为 null: object={}", objectName);
+        }
+
+        return MinioTreeNode.builder()
+                .id(bucket + "/" + objectName)
+                .type(isDir ? NodeType.FOLDER : NodeType.FILE)
+                .name(isDir ? extractFileName(objectName.substring(0, objectName.length() - 1))
+                        : extractFileName(objectName))
+                .path(objectName)
+                .bucket(bucket)
+                .size(isDir ? null : item.size())
+                .lastModified(lastModified)
+                .build();
     }
 
     public String formatSize(Long bytes) {
@@ -410,62 +442,6 @@ public class MinioService {
 
     // ==================== 文件/文件夹操作 ====================
 
-    /**
-     * 列出指定前缀下的所有对象（递归）
-     * 用于构建完整的树形结构
-     */
-    public List<MinioTreeNode> listAllObjects(String bucket) {
-        try {
-            Iterable<io.minio.Result<Item>> results = getClient().listObjects(
-                    ListObjectsArgs.builder()
-                            .bucket(bucket)
-                            .recursive(true)
-                            .build()
-            );
-
-            List<MinioTreeNode> nodes = new ArrayList<>();
-
-            for (io.minio.Result<Item> result : results) {
-                Item item = result.get();
-                String objectName = item.objectName();
-
-                if (isPlaceholder(objectName)) {
-                    continue;
-                }
-
-                boolean isDir = item.isDir();
-
-                // 安全获取 lastModified
-                LocalDateTime lastModified = null;
-                try {
-                    if (item.lastModified() != null) {
-                        lastModified = item.lastModified().toInstant()
-                                .atZone(ZoneId.systemDefault()).toLocalDateTime();
-                    }
-                } catch (Exception e) {
-                    // 忽略 lastModified 解析错误，保持为 null
-                }
-
-                MinioTreeNode node = MinioTreeNode.builder()
-                        .id(bucket + "/" + objectName)
-                        .type(isDir ? NodeType.FOLDER : NodeType.FILE)
-                        .name(isDir ? extractFileName(objectName.substring(0, objectName.length() - 1)) : extractFileName(objectName))
-                        .path(objectName)
-                        .bucket(bucket)
-                        .size(isDir ? null : item.size())
-                        .lastModified(lastModified)
-                        .build();
-
-                nodes.add(node);
-            }
-
-            return nodes;
-        } catch (Exception e) {
-            log.error("列出所有对象失败: bucket={}", bucket, e);
-            throw new RuntimeException(msg("service.fileListFailed", e.getMessage()), e);
-        }
-    }
-
     public List<MinioTreeNode> listObjects(String bucket, String prefix) {
         try {
             if (prefix == null) {
@@ -490,28 +466,7 @@ public class MinioService {
                     continue;
                 }
 
-                boolean isDir = item.isDir();
-
-                // 安全获取 lastModified
-                LocalDateTime lastModified = null;
-                try {
-                    if (item.lastModified() != null) {
-                        lastModified = item.lastModified().toInstant()
-                                .atZone(ZoneId.systemDefault()).toLocalDateTime();
-                    }
-                } catch (Exception e) {
-                    // 忽略 lastModified 解析错误，保持为 null
-                }
-
-                MinioTreeNode node = MinioTreeNode.builder()
-                        .id(bucket + "/" + objectName)
-                        .type(isDir ? NodeType.FOLDER : NodeType.FILE)
-                        .name(isDir ? extractFileName(objectName.substring(0, objectName.length() - 1)) : extractFileName(objectName))
-                        .path(objectName)
-                        .bucket(bucket)
-                        .size(isDir ? null : item.size())
-                        .lastModified(lastModified)
-                        .build();
+                MinioTreeNode node = toTreeNode(bucket, item);
 
                 nodes.add(node);
             }
@@ -627,12 +582,8 @@ public class MinioService {
      * @param folderPath 文件夹路径（以 / 结尾）
      * @return true 如果文件夹存在
      */
-    public boolean folderExists(String bucket, String folderPath) {
+    private boolean folderExists(String bucket, String folderPath) {
         try {
-            if (!folderPath.endsWith("/")) {
-                folderPath += "/";
-            }
-
             // 检查文件夹的占位文件是否存在
             String placeholderPath = folderPath + PLACEHOLDER_FILE;
 
@@ -761,31 +712,6 @@ public class MinioService {
         }
     }
 
-    public MinioTreeNode getFileInfo(String bucket, String objectName) {
-        try {
-            StatObjectResponse stat = getClient().statObject(
-                    StatObjectArgs.builder()
-                            .bucket(bucket)
-                            .object(objectName)
-                            .build()
-            );
-
-            return MinioTreeNode.builder()
-                    .id(bucket + "/" + objectName)
-                    .type(NodeType.FILE)
-                    .name(extractFileName(objectName))
-                    .path(objectName)
-                    .bucket(bucket)
-                    .size(stat.size())
-                    .lastModified(stat.lastModified() != null ?
-                            stat.lastModified().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() : null)
-                    .build();
-        } catch (Exception e) {
-            log.error("获取文件信息失败: bucket={}, object={}", bucket, objectName, e);
-            return null;
-        }
-    }
-
     public BatchDeleteResult batchDelete(String bucket, List<MinioTreeNode> items) {
         BatchDeleteResult result = BatchDeleteResult.builder()
                 .deletedFiles(0)
@@ -909,16 +835,7 @@ public class MinioService {
 
                     String fileName = extractFileName(objectName);
                     if (fileName.toLowerCase().contains(keyword)) {
-                        MinioTreeNode node = MinioTreeNode.builder()
-                                .id(bucket + "/" + objectName)
-                                .type(NodeType.FILE)
-                                .name(fileName)
-                                .path(objectName)
-                                .bucket(bucket)
-                                .size(item.size())
-                                .lastModified(item.lastModified() != null ?
-                                        item.lastModified().toInstant().atZone(ZoneId.systemDefault()).toLocalDateTime() : null)
-                                .build();
+                        MinioTreeNode node = toTreeNode(bucket, item);
 
                         matchedItems.add(node);
 
@@ -994,24 +911,25 @@ public class MinioService {
             createFolder(bucket, remoteBasePath);
             result.setCreatedFolders(1);
 
-            // 收集所有文件
+            // 收集所有文件（Files.walk 必须用 try-with-resources 关闭，否则目录句柄泄漏）
             List<Path> allFiles = new ArrayList<>();
-            Files.walk(localFolder)
-                .filter(path -> !Files.isDirectory(path))
-                .forEach(allFiles::add);
+            try (java.util.stream.Stream<Path> paths = Files.walk(localFolder)) {
+                paths.filter(path -> !Files.isDirectory(path))
+                     .forEach(allFiles::add);
+            }
 
             // 计算总大小
-            long[] totalSize = {0};
+            long totalSize = 0;
             for (Path file : allFiles) {
                 try {
-                    totalSize[0] += Files.size(file);
+                    totalSize += Files.size(file);
                 } catch (Exception e) {
                     // ignore
                 }
             }
 
             // 记录已上传大小
-            long[] uploadedSize = {0};
+            long uploadedSize = 0;
 
             // 跟踪已创建的文件夹
             Set<String> createdFolders = new HashSet<>();
@@ -1041,9 +959,9 @@ public class MinioService {
                     result.setTotalBytes(result.getTotalBytes() + fileSize);
 
                     // 更新进度
-                    uploadedSize[0] += fileSize;
-                    if (progressConsumer != null && totalSize[0] > 0) {
-                        double progress = (double) uploadedSize[0] / totalSize[0];
+                    uploadedSize += fileSize;
+                    if (progressConsumer != null && totalSize > 0) {
+                        double progress = (double) uploadedSize / totalSize;
                         progressConsumer.accept(progress);
                     }
 
@@ -1120,7 +1038,7 @@ public class MinioService {
                     .build());
         }
 
-        log.debug(msg("service.batchUploadStart"), bucket, requests.size(), requests.size());
+        log.debug(msg("service.batchUploadStart"), bucket, requests.size());
 
         // 为每个文件创建独立的异步任务
         List<CompletableFuture<BatchUploadResult>> futures = requests.stream()
@@ -1131,49 +1049,6 @@ public class MinioService {
                 .collect(Collectors.toList());
 
         return mergeResults(futures);
-    }
-
-    /**
-     * 批量上传文件到 MinIO，使用临时线程池。
-     * <p>
-     * 创建指定大小的临时线程池执行上传任务，
-     * 线程池在上传完成后自动关闭。
-     * 单个文件上传失败不会影响其他文件的上传。
-     *
-     * @param bucket 目标 Bucket 名称
-     * @param requests 上传请求列表
-     * @param threadCount 线程数（必须大于 0）
-     * @return CompletableFuture 包含批量上传结果
-     */
-    public CompletableFuture<BatchUploadResult> batchUpload(
-            String bucket, List<UploadRequest> requests, int threadCount) {
-        if (bucket == null || bucket.isBlank()) {
-            throw new IllegalArgumentException(msg("service.bucketRequired"));
-        }
-        if (threadCount <= 0) {
-            throw new IllegalArgumentException(msg("service.threadCountInvalid", threadCount));
-        }
-        if (requests == null || requests.isEmpty()) {
-            return CompletableFuture.completedFuture(BatchUploadResult.builder()
-                    .successCount(0)
-                    .totalBytes(0)
-                    .failedFiles(new ArrayList<>())
-                    .build());
-        }
-
-        log.debug("批量上传开始: bucket={}, 文件数={}, 线程数={}", bucket, requests.size(), threadCount);
-
-        ExecutorService tempPool = Executors.newFixedThreadPool(threadCount);
-
-        List<CompletableFuture<BatchUploadResult>> futures = requests.stream()
-                .map(req -> CompletableFuture.supplyAsync(
-                        () -> uploadSingle(bucket, req),
-                        tempPool
-                ))
-                .collect(Collectors.toList());
-
-        return mergeResults(futures)
-                .whenComplete((result, ex) -> tempPool.shutdown());
     }
 
     /**
