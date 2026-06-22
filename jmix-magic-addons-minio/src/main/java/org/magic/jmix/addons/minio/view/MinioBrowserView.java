@@ -64,6 +64,10 @@ import io.jmix.flowui.view.MessageBundle;
 
 import io.jmix.flowui.component.codeeditor.CodeEditor;
 import io.jmix.flowui.kit.component.codeeditor.CodeEditorMode;
+import io.jmix.flowui.component.datepicker.TypedDatePicker;
+import io.jmix.flowui.component.textfield.TypedTextField;
+import io.jmix.flowui.component.textfield.JmixNumberField;
+import io.jmix.flowui.component.checkbox.JmixCheckbox;
 
 import com.vaadin.flow.component.checkbox.Checkbox;
 import com.vaadin.flow.component.combobox.ComboBox;
@@ -579,7 +583,8 @@ public class MinioBrowserView extends StandardView {
         dialog.setHeaderTitle(msg("minioBrowserView.dialogCreateBucketTitle"));
         dialog.setWidth("400px");
 
-        TextField nameField = new TextField(msg("minioBrowserView.dialogBucketNameField"));
+        TextField nameField = uiComponents.create(TypedTextField.class);
+        nameField.setLabel(msg("minioBrowserView.dialogBucketNameField"));
         nameField.setWidthFull();
         nameField.setRequired(true);
         nameField.setHelperText(msg("minioBrowserView.dialogBucketNameHelper"));
@@ -654,7 +659,8 @@ public class MinioBrowserView extends StandardView {
         dialog.setHeaderTitle(msg("minioBrowserView.dialogRenameBucketTitle"));
         dialog.setWidth("400px");
 
-        TextField nameField = new TextField(msg("minioBrowserView.dialogNewName"));
+        TextField nameField = uiComponents.create(TypedTextField.class);
+        nameField.setLabel(msg("minioBrowserView.dialogNewName"));
         nameField.setWidthFull();
         nameField.setValue(selected.getName());
         nameField.setRequired(true);
@@ -790,10 +796,12 @@ public class MinioBrowserView extends StandardView {
         formPanel.add(placeholder);
 
         // Form fields (created once, reused)
-        Checkbox enabledField = new Checkbox(msg("minioBrowserView.ruleEnabled"));
+        Checkbox enabledField = uiComponents.create(JmixCheckbox.class);
+        enabledField.setLabel(msg("minioBrowserView.ruleEnabled"));
         enabledField.setValue(true);
 
-        TextField prefixField = new TextField(msg("minioBrowserView.rulePrefix"));
+        TextField prefixField = uiComponents.create(TypedTextField.class);
+        prefixField.setLabel(msg("minioBrowserView.rulePrefix"));
         prefixField.setWidthFull();
         prefixField.setPlaceholder(msg("minioBrowserView.rulePrefixPlaceholder"));
 
@@ -803,33 +811,39 @@ public class MinioBrowserView extends StandardView {
         expirationMode.setValue(msg("minioBrowserView.expirationModeRelative"));
         expirationMode.addThemeVariants(RadioGroupVariant.LUMO_VERTICAL);
 
-        NumberField retentionDaysField = new NumberField(msg("minioBrowserView.ruleRetentionDays"));
+        NumberField retentionDaysField = uiComponents.create(JmixNumberField.class);
+        retentionDaysField.setLabel(msg("minioBrowserView.ruleRetentionDays"));
         retentionDaysField.setWidthFull();
         retentionDaysField.setMin(1);
         retentionDaysField.setMax(10000);
         retentionDaysField.setStep(1);
+        retentionDaysField.setHelperText(msg("minioBrowserView.ruleDaysHelper"));
 
-        DatePicker expirationDatePicker = new DatePicker(msg("minioBrowserView.ruleExpirationDate"));
+        DatePicker expirationDatePicker = uiComponents.create(TypedDatePicker.class);
+        expirationDatePicker.setLabel(msg("minioBrowserView.ruleExpirationDate"));
         expirationDatePicker.setWidthFull();
         expirationDatePicker.setVisible(false);
-        // 设置 locale 为当前系统语言
-        expirationDatePicker.setLocale(Locale.getDefault());
         // 设置最小日期为明天
         expirationDatePicker.setMin(LocalDate.now().plusDays(1));
 
-        NumberField noncurrentDaysField = new NumberField(msg("minioBrowserView.ruleNoncurrentDays"));
+        NumberField noncurrentDaysField = uiComponents.create(JmixNumberField.class);
+        noncurrentDaysField.setLabel(msg("minioBrowserView.ruleNoncurrentDays"));
         noncurrentDaysField.setWidthFull();
         noncurrentDaysField.setMin(1);
         noncurrentDaysField.setMax(10000);
         noncurrentDaysField.setStep(1);
+        noncurrentDaysField.setHelperText(msg("minioBrowserView.ruleDaysHelper"));
 
-        Checkbox deleteMarkerField = new Checkbox(msg("minioBrowserView.ruleDeleteMarker"));
+        Checkbox deleteMarkerField = uiComponents.create(JmixCheckbox.class);
+        deleteMarkerField.setLabel(msg("minioBrowserView.ruleDeleteMarker"));
 
-        NumberField abortDaysField = new NumberField(msg("minioBrowserView.ruleAbortDays"));
+        NumberField abortDaysField = uiComponents.create(JmixNumberField.class);
+        abortDaysField.setLabel(msg("minioBrowserView.ruleAbortDays"));
         abortDaysField.setWidthFull();
         abortDaysField.setMin(1);
         abortDaysField.setMax(10000);
         abortDaysField.setStep(1);
+        abortDaysField.setHelperText(msg("minioBrowserView.ruleDaysHelper"));
 
         // Toggle visibility based on expiration mode
         expirationMode.addValueChangeListener(e -> {
@@ -906,11 +920,23 @@ public class MinioBrowserView extends StandardView {
             MinioLifecycleRuleDto rule = editingRule[0];
             if (rule == null) return;
 
+            // 验证：相对天数模式下，天数必填
+            boolean isAbsolute = msg("minioBrowserView.expirationModeAbsolute").equals(expirationMode.getValue());
+            if (!isAbsolute && retentionDaysField.getValue() == null) {
+                NotificationUtil.warning(msg("minioBrowserView.validationRetentionDaysRequired"));
+                return;
+            }
+
+            // 验证：绝对日期模式下，日期必填
+            if (isAbsolute && expirationDatePicker.getValue() == null) {
+                NotificationUtil.warning(msg("minioBrowserView.validationExpirationDateRequired"));
+                return;
+            }
+
             rule.setEnabled(enabledField.getValue());
             String prefix = prefixField.getValue();
             rule.setPrefix(prefix != null ? prefix.trim() : null);
 
-            boolean isAbsolute = msg("minioBrowserView.expirationModeAbsolute").equals(expirationMode.getValue());
             rule.setExpirationDate(isAbsolute ? expirationDatePicker.getValue() : null);
             if (!isAbsolute) {
                 Double daysValue = retentionDaysField.getValue();
@@ -985,19 +1011,10 @@ public class MinioBrowserView extends StandardView {
         content.setHeight("100%");
         content.setFlexGrow(1, leftPanel, rightPanel);
 
-        // Close button in footer - triggers save on close
+        // Close button in footer - only close, no save
         Button closeBtn = new Button(msg("minioBrowserView.dialogClose"));
         closeBtn.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-
-        closeBtn.addClickListener(e -> {
-            try {
-                minioService.setBucketLifecycle(bucketName, ruleList);
-                NotificationUtil.success(msg("minioBrowserView.lifecycleConfigSaved"));
-            } catch (Exception ex) {
-                NotificationUtil.error(msg("minioBrowserView.lifecycleConfigSaveFailed") + ": " + ex.getMessage());
-            }
-            dialog.close();
-        });
+        closeBtn.addClickListener(e -> dialog.close());
 
         dialog.add(content);
         dialog.getFooter().add(closeBtn);
@@ -1719,7 +1736,8 @@ public class MinioBrowserView extends StandardView {
         pathSelector.setSelectedPath(inferDefaultPath());
 
         // 文件夹名称输入
-        TextField nameField = new TextField(msg("minioBrowserView.dialogFolderNameField"));
+        TextField nameField = uiComponents.create(TypedTextField.class);
+        nameField.setLabel(msg("minioBrowserView.dialogFolderNameField"));
         nameField.setWidthFull();
         nameField.setRequired(true);
 
