@@ -9,6 +9,13 @@ import io.minio.http.Method;
 import io.minio.messages.DeleteError;
 import io.minio.messages.DeleteObject;
 import io.minio.messages.Item;
+import io.minio.messages.LifecycleConfiguration;
+import io.minio.messages.LifecycleRule;
+import io.minio.messages.RuleFilter;
+import io.minio.messages.Expiration;
+import io.minio.messages.NoncurrentVersionExpiration;
+import io.minio.messages.AbortIncompleteMultipartUpload;
+import io.minio.messages.Status;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -21,11 +28,14 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.Base64;
 import java.util.Iterator;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -1252,5 +1262,167 @@ public class MinioService {
         }
 
         throw new IOException(msg("service.resolveInputStreamFailed", request.getObjectName()));
+    }
+
+    /**
+     * 获取 bucket 的生命周期规则列表。
+     *
+     * @param bucketName bucket 名称
+     * @return 生命周期规则列表，无配置时返回空列表
+     */
+    public List<MinioLifecycleRuleDto> getBucketLifecycle(String bucketName) {
+        try {
+            LifecycleConfiguration config = getClient().getBucketLifecycle(
+                    GetBucketLifecycleArgs.builder()
+                            .bucket(bucketName)
+                            .build()
+            );
+
+            List<MinioLifecycleRuleDto> result = new ArrayList<>();
+            for (LifecycleRule rule : config.rules()) {
+                MinioLifecycleRuleDto dto = new MinioLifecycleRuleDto();
+                dto.setId(rule.id());
+                dto.setEnabled(rule.status() == Status.ENABLED);
+
+                // 前缀过滤
+                if (rule.filter() != null && rule.filter().prefix() != null) {
+                    dto.setPrefix(rule.filter().prefix());
+                }
+
+                // 过期配置
+                Expiration expiration = rule.expiration();
+                if (expiration != null) {
+                    if (expiration.date() != null) {
+                        dto.setExpirationDate(expiration.date().withZoneSameInstant(ZoneId.of("UTC")).toLocalDate());
+                    }
+                    if (expiration.days() != null) {
+                        dto.setRetentionDays(expiration.days());
+                    }
+                    if (expiration.expiredObjectDeleteMarker() != null) {
+                        dto.setExpiredObjectDeleteMarker(expiration.expiredObjectDeleteMarker());
+                    }
+                }
+
+                // 非当前版本过期
+                NoncurrentVersionExpiration noncurrentExp = rule.noncurrentVersionExpiration();
+                if (noncurrentExp != null) {
+                    dto.setNoncurrentVersionExpirationDays(noncurrentExp.noncurrentDays());
+                }
+
+                // 中断未完成分片上传
+                AbortIncompleteMultipartUpload abortUpload = rule.abortIncompleteMultipartUpload();
+                if (abortUpload != null) {
+                    dto.setAbortIncompleteMultipartUploadDays(abortUpload.daysAfterInitiation());
+                }
+
+                result.add(dto);
+            }
+            return result;
+        } catch (Exception e) {
+            // NoSuchLifecycleConfiguration 错误码表示无配置，返回空列表
+            if (e.getMessage() != null && e.getMessage().contains("NoSuchLifecycleConfiguration")) {
+                return new ArrayList<>();
+            }
+            log.error("获取生命周期配置失败: bucket={}", bucketName, e);
+            throw new RuntimeException(msg("service.getLifecycleFailed"), e);
+        }
+    }
+
+    /**
+     * 设置 bucket 的生命周期规则（全量替换）。
+     *
+     * @param bucketName bucket 名称
+     * @param rules 生命周期规则列表
+     */
+    public void setBucketLifecycle(String bucketName, List<MinioLifecycleRuleDto> rules) {
+        try {
+            List<LifecycleRule> lifecycleRules = new LinkedList<>();
+
+            for (MinioLifecycleRuleDto dto : rules) {
+                // 构建过期配置（Expiration 构造函数：date, days, expiredObjectDeleteMarker 三者互斥）
+                Expiration expiration = null;
+                if (dto.getExpirationDate() != null) {
+                    LocalDate date = dto.getExpirationDate();
+                    ZonedDateTime utcMidnight = ZonedDateTime.of(
+                            date.getYear(), date.getMonthValue(), date.getDayOfMonth(),
+                            0, 0, 0, 0, ZoneId.of("UTC")
+                    );
+                    expiration = new Expiration(utcMidnight, null, null);
+                } else if (dto.getRetentionDays() != null) {
+                    expiration = new Expiration((io.minio.messages.ResponseDate) null, dto.getRetentionDays(), null);
+                } else if (Boolean.TRUE.equals(dto.getExpiredObjectDeleteMarker())) {
+                    expiration = new Expiration((io.minio.messages.ResponseDate) null, null, Boolean.TRUE);
+                }
+
+                // 前缀过滤（S3 要求必须设置，空字符串表示整个 bucket）
+                String prefix = dto.getPrefix();
+                RuleFilter filter = new RuleFilter(prefix != null ? prefix : "");
+
+                // 非当前版本过期
+                NoncurrentVersionExpiration noncurrentVersionExpiration = null;
+                if (dto.getNoncurrentVersionExpirationDays() != null) {
+                    noncurrentVersionExpiration = new NoncurrentVersionExpiration(dto.getNoncurrentVersionExpirationDays());
+                }
+
+                // 中断未完成分片上传
+                AbortIncompleteMultipartUpload abortIncompleteMultipartUpload = null;
+                if (dto.getAbortIncompleteMultipartUploadDays() != null) {
+                    abortIncompleteMultipartUpload = new AbortIncompleteMultipartUpload(dto.getAbortIncompleteMultipartUploadDays());
+                }
+
+                // 构建规则：通过构造函数（无 builder）
+                // 参数顺序：status, abortIncompleteMultipartUpload, expiration, filter, id, noncurrentVersionExpiration, noncurrentVersionTransition, transition
+                LifecycleRule rule = new LifecycleRule(
+                        Boolean.TRUE.equals(dto.getEnabled()) ? Status.ENABLED : Status.DISABLED,
+                        abortIncompleteMultipartUpload,
+                        expiration,
+                        filter,
+                        dto.getId() != null ? dto.getId() : UUID.randomUUID().toString(),
+                        noncurrentVersionExpiration,
+                        null,
+                        null
+                );
+
+                lifecycleRules.add(rule);
+            }
+
+            // 先删除现有配置，再设置新配置
+            getClient().deleteBucketLifecycle(
+                    DeleteBucketLifecycleArgs.builder()
+                            .bucket(bucketName)
+                            .build()
+            );
+
+            if (!lifecycleRules.isEmpty()) {
+                LifecycleConfiguration config = new LifecycleConfiguration(lifecycleRules);
+                getClient().setBucketLifecycle(
+                        SetBucketLifecycleArgs.builder()
+                                .bucket(bucketName)
+                                .config(config)
+                                .build()
+                );
+            }
+        } catch (Exception e) {
+            log.error("设置生命周期配置失败: bucket={}", bucketName, e);
+            throw new RuntimeException(msg("service.setLifecycleFailed"), e);
+        }
+    }
+
+    /**
+     * 清除 bucket 的所有生命周期规则。
+     *
+     * @param bucketName bucket 名称
+     */
+    public void clearBucketLifecycle(String bucketName) {
+        try {
+            getClient().deleteBucketLifecycle(
+                    DeleteBucketLifecycleArgs.builder()
+                            .bucket(bucketName)
+                            .build()
+            );
+        } catch (Exception e) {
+            log.error("清除生命周期配置失败: bucket={}", bucketName, e);
+            throw new RuntimeException(msg("service.clearLifecycleFailed"), e);
+        }
     }
 }

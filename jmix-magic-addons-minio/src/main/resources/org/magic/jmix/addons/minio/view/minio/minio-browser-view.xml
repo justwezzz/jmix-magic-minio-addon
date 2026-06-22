@@ -8,6 +8,7 @@
         <action id="renameBucketAction" text="msg://minioBrowserView.renameBucket" icon="EDIT"/>
         <action id="deleteBucketAction" text="msg://minioBrowserView.deleteBucket" icon="TRASH"/>
         <action id="refreshBucketAction" text="msg://minioBrowserView.refresh" icon="REFRESH"/>
+        <action id="lifecycleBucketAction" text="msg://minioBrowserView.lifecycleConfig" icon="CLOCK"/>
         <!-- File actions -->
         <action id="createFolderAction" text="msg://minioBrowserView.createFolder" icon="FOLDER_ADD"/>
         <action id="uploadFileAction" text="msg://minioBrowserView.uploadFile" icon="FILE_ADD"/>
@@ -29,6 +30,7 @@
                     <dropdownButton id="bucketMoreBtn" text="msg://minioBrowserView.more"
                                     icon="ELLIPSIS_DOTS_H">
                         <items>
+                            <actionItem id="lifecycleBucketItem" ref="lifecycleBucketAction"/>
                             <actionItem id="renameBucketItem" ref="renameBucketAction"/>
                             <actionItem id="deleteBucketItem" ref="deleteBucketAction"/>
                         </items>

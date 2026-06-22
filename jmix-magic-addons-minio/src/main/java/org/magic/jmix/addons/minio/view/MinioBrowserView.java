@@ -65,14 +65,23 @@ import io.jmix.flowui.view.MessageBundle;
 import io.jmix.flowui.component.codeeditor.CodeEditor;
 import io.jmix.flowui.kit.component.codeeditor.CodeEditorMode;
 
+import com.vaadin.flow.component.checkbox.Checkbox;
+import com.vaadin.flow.component.combobox.ComboBox;
+import com.vaadin.flow.component.datepicker.DatePicker;
+import com.vaadin.flow.component.radiobutton.RadioButtonGroup;
+import com.vaadin.flow.component.radiobutton.RadioGroupVariant;
+import org.magic.jmix.addons.minio.dto.MinioLifecycleRuleDto;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -302,6 +311,16 @@ public class MinioBrowserView extends StandardView {
         loadBuckets();
         clearFileTree();
         NotificationUtil.success(msg("minioBrowserView.bucketListRefreshed"));
+    }
+
+    @Subscribe("lifecycleBucketAction")
+    public void onLifecycleBucketClick(ActionPerformedEvent event) {
+        MinioBucketDto selected = bucketDataGrid.getSingleSelectedItem();
+        if (selected == null) {
+            NotificationUtil.warning(msg("minioBrowserView.selectBucketFirst"));
+            return;
+        }
+        showLifecycleConfigDialog(selected.getName());
     }
 
     @Subscribe("uploadFileAction")
@@ -694,6 +713,337 @@ public class MinioBrowserView extends StandardView {
             return false;
         }
         return true;
+    }
+
+    // ==================== Lifecycle Configuration Dialog ====================
+
+    /**
+     * Master-detail lifecycle configuration dialog.
+     * Left: rule list Grid + add/delete buttons.
+     * Right: edit form for the selected rule.
+     * On dialog close, all rules are saved to MinIO.
+     */
+    private void showLifecycleConfigDialog(String bucketName) {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle(msg("minioBrowserView.lifecycleConfig") + " - " + bucketName);
+        dialog.setWidth("80%");
+        dialog.setHeight("70%");
+        dialog.setResizable(true);
+        dialog.setDraggable(true);
+
+        // Load existing rules
+        List<MinioLifecycleRuleDto> rules;
+        try {
+            rules = minioService.getBucketLifecycle(bucketName);
+        } catch (Exception e) {
+            NotificationUtil.error(msg("minioBrowserView.lifecycleConfigSaveFailed") + ": " + e.getMessage());
+            return;
+        }
+        // Ensure each rule has an ID
+        for (MinioLifecycleRuleDto r : rules) {
+            if (r.getId() == null || r.getId().isEmpty()) {
+                r.setId(UUID.randomUUID().toString());
+            }
+        }
+
+        List<MinioLifecycleRuleDto> ruleList = new ArrayList<>(rules);
+
+        // === Left panel: rule grid + buttons ===
+        Grid<MinioLifecycleRuleDto> ruleGrid = new Grid<>();
+        ruleGrid.setWidthFull();
+        ruleGrid.setHeight("100%");
+        ruleGrid.setSelectionMode(Grid.SelectionMode.SINGLE);
+
+        ruleGrid.addColumn(MinioLifecycleRuleDto::getId)
+                .setHeader("ID").setVisible(false);
+        ruleGrid.addColumn(r -> {
+            Boolean enabled = r.getEnabled();
+            return Boolean.TRUE.equals(enabled)
+                    ? msg("minioBrowserView.ruleEnabled")
+                    : "-";
+        }).setHeader(msg("minioBrowserView.ruleColumnEnabled")).setAutoWidth(true);
+        ruleGrid.addColumn(r -> {
+            String prefix = r.getPrefix();
+            return (prefix != null && !prefix.isEmpty()) ? prefix : "*";
+        }).setHeader(msg("minioBrowserView.ruleColumnPrefix")).setFlexGrow(1);
+        ruleGrid.addColumn(r -> {
+            if (r.getRetentionDays() != null) return r.getRetentionDays() + " " + msg("minioBrowserView.daysAfterCreation");
+            if (r.getExpirationDate() != null) return r.getExpirationDate().toString();
+            if (Boolean.TRUE.equals(r.getExpiredObjectDeleteMarker())) return msg("minioBrowserView.ruleDeleteMarker");
+            return "-";
+        }).setHeader(msg("minioBrowserView.ruleColumnDays")).setFlexGrow(1);
+
+        ruleGrid.setItems(ruleList);
+
+        // === Right panel: edit form ===
+        VerticalLayout formPanel = new VerticalLayout();
+        formPanel.setPadding(false);
+        formPanel.setSpacing(true);
+        formPanel.setWidthFull();
+        formPanel.getStyle().set("overflow-y", "auto");
+
+        // Placeholder when no rule selected
+        Span placeholder = new Span(msg("minioBrowserView.noRules"));
+        placeholder.getStyle().set("color", "var(--lumo-secondary-text-color)");
+        formPanel.add(placeholder);
+
+        // Form fields (created once, reused)
+        Checkbox enabledField = new Checkbox(msg("minioBrowserView.ruleEnabled"));
+        enabledField.setValue(true);
+
+        TextField prefixField = new TextField(msg("minioBrowserView.rulePrefix"));
+        prefixField.setWidthFull();
+        prefixField.setPlaceholder(msg("minioBrowserView.rulePrefixPlaceholder"));
+
+        RadioButtonGroup<String> expirationMode = new RadioButtonGroup<>();
+        expirationMode.setLabel(msg("minioBrowserView.ruleExpirationMode"));
+        expirationMode.setItems(msg("minioBrowserView.expirationModeRelative"), msg("minioBrowserView.expirationModeAbsolute"));
+        expirationMode.setValue(msg("minioBrowserView.expirationModeRelative"));
+        expirationMode.addThemeVariants(RadioGroupVariant.LUMO_VERTICAL);
+
+        TextField retentionDaysField = new TextField(msg("minioBrowserView.ruleRetentionDays"));
+        retentionDaysField.setWidthFull();
+
+        DatePicker expirationDatePicker = new DatePicker(msg("minioBrowserView.ruleExpirationDate"));
+        expirationDatePicker.setWidthFull();
+        expirationDatePicker.setVisible(false);
+
+        TextField noncurrentDaysField = new TextField(msg("minioBrowserView.ruleNoncurrentDays"));
+        noncurrentDaysField.setWidthFull();
+
+        Checkbox deleteMarkerField = new Checkbox(msg("minioBrowserView.ruleDeleteMarker"));
+
+        TextField abortDaysField = new TextField(msg("minioBrowserView.ruleAbortDays"));
+        abortDaysField.setWidthFull();
+
+        // Toggle visibility based on expiration mode
+        expirationMode.addValueChangeListener(e -> {
+            boolean isAbsolute = msg("minioBrowserView.expirationModeAbsolute").equals(e.getValue());
+            retentionDaysField.setVisible(!isAbsolute);
+            expirationDatePicker.setVisible(isAbsolute);
+        });
+
+        // Save / Cancel buttons for form
+        Button saveBtn = new Button(msg("minioBrowserView.saveRule"));
+        saveBtn.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+        saveBtn.setEnabled(false);
+
+        Button cancelBtn = new Button(msg("minioBrowserView.cancelRule"));
+        cancelBtn.setEnabled(false);
+
+        // Layout the form fields
+        HorizontalLayout modeRow = new HorizontalLayout(expirationMode);
+        modeRow.setWidthFull();
+
+        HorizontalLayout daysRow = new HorizontalLayout(retentionDaysField, expirationDatePicker);
+        daysRow.setWidthFull();
+        daysRow.setFlexGrow(1, retentionDaysField, expirationDatePicker);
+
+        HorizontalLayout btnRow = new HorizontalLayout(cancelBtn, saveBtn);
+        btnRow.setJustifyContentMode(HorizontalLayout.JustifyContentMode.END);
+        btnRow.setWidthFull();
+
+        formPanel.add(enabledField, prefixField, modeRow, daysRow,
+                noncurrentDaysField, deleteMarkerField, abortDaysField, btnRow);
+
+        // Hide all form fields initially
+        for (int i = 0; i < formPanel.getComponentCount(); i++) {
+            formPanel.getComponentAt(i).setVisible(false);
+        }
+        placeholder.setVisible(true);
+
+        // Track currently editing rule
+        final MinioLifecycleRuleDto[] editingRule = new MinioLifecycleRuleDto[1];
+
+        // clearForm runnable
+        Runnable clearForm = () -> {
+            for (int i = 0; i < formPanel.getComponentCount(); i++) {
+                formPanel.getComponentAt(i).setVisible(false);
+            }
+            placeholder.setVisible(true);
+            saveBtn.setEnabled(false);
+            cancelBtn.setEnabled(false);
+            editingRule[0] = null;
+        };
+
+        // Selection listener
+        ruleGrid.addSelectionListener(e -> {
+            MinioLifecycleRuleDto selected = e.getFirstSelectedItem().orElse(null);
+            if (selected == null) {
+                clearForm.run();
+                return;
+            }
+            editingRule[0] = selected;
+            loadRuleToForm(selected, enabledField, prefixField, expirationMode,
+                    retentionDaysField, expirationDatePicker, noncurrentDaysField,
+                    deleteMarkerField, abortDaysField);
+            // Show form, hide placeholder
+            for (int i = 0; i < formPanel.getComponentCount(); i++) {
+                formPanel.getComponentAt(i).setVisible(true);
+            }
+            placeholder.setVisible(false);
+            saveBtn.setEnabled(true);
+            cancelBtn.setEnabled(true);
+        });
+
+        // Save button action - update rule in list
+        saveBtn.addClickListener(e -> {
+            MinioLifecycleRuleDto rule = editingRule[0];
+            if (rule == null) return;
+
+            rule.setEnabled(enabledField.getValue());
+            String prefix = prefixField.getValue();
+            rule.setPrefix(prefix != null ? prefix.trim() : null);
+
+            boolean isAbsolute = msg("minioBrowserView.expirationModeAbsolute").equals(expirationMode.getValue());
+            rule.setExpirationDate(isAbsolute ? expirationDatePicker.getValue() : null);
+            if (!isAbsolute) {
+                String daysText = retentionDaysField.getValue();
+                rule.setRetentionDays((daysText != null && !daysText.isEmpty()) ? Integer.parseInt(daysText) : null);
+            } else {
+                rule.setRetentionDays(null);
+            }
+
+            String ncDaysText = noncurrentDaysField.getValue();
+            rule.setNoncurrentVersionExpirationDays(
+                    (ncDaysText != null && !ncDaysText.isEmpty()) ? Integer.parseInt(ncDaysText) : null);
+
+            rule.setExpiredObjectDeleteMarker(deleteMarkerField.getValue());
+
+            String abortText = abortDaysField.getValue();
+            rule.setAbortIncompleteMultipartUploadDays(
+                    (abortText != null && !abortText.isEmpty()) ? Integer.parseInt(abortText) : null);
+
+            ruleGrid.getDataProvider().refreshAll();
+            NotificationUtil.success(msg("minioBrowserView.ruleSaved"));
+        });
+
+        // Cancel button action
+        cancelBtn.addClickListener(e -> {
+            ruleGrid.deselectAll();
+            clearForm.run();
+        });
+
+        // Add / Delete buttons
+        Button addBtn = new Button(msg("minioBrowserView.addRule"), VaadinIcon.PLUS.create());
+        addBtn.addClickListener(e -> {
+            MinioLifecycleRuleDto newRule = new MinioLifecycleRuleDto();
+            newRule.setId(UUID.randomUUID().toString());
+            newRule.setEnabled(true);
+            ruleList.add(newRule);
+            ruleGrid.getDataProvider().refreshAll();
+            ruleGrid.select(newRule);
+        });
+
+        Button deleteBtn = new Button(msg("minioBrowserView.deleteRule"), VaadinIcon.TRASH.create());
+        deleteBtn.addThemeVariants(ButtonVariant.LUMO_ERROR);
+        deleteBtn.addClickListener(e -> {
+            MinioLifecycleRuleDto selected = ruleGrid.getSelectedItems().stream().findFirst().orElse(null);
+            if (selected == null) return;
+            showConfirmDialog(msg("minioBrowserView.confirmDeleteRule"), () -> {
+                ruleList.remove(selected);
+                ruleGrid.getDataProvider().refreshAll();
+                ruleGrid.deselectAll();
+                clearForm.run();
+            });
+        });
+
+        HorizontalLayout gridBtnRow = new HorizontalLayout(addBtn, deleteBtn);
+        gridBtnRow.setPadding(false);
+
+        VerticalLayout leftPanel = new VerticalLayout(ruleGrid, gridBtnRow);
+        leftPanel.setPadding(false);
+        leftPanel.setSpacing(true);
+        leftPanel.setWidth("55%");
+        leftPanel.setHeight("100%");
+        leftPanel.setFlexGrow(1, ruleGrid);
+        leftPanel.expand(ruleGrid);
+
+        VerticalLayout rightPanel = new VerticalLayout(formPanel);
+        rightPanel.setPadding(false);
+        rightPanel.setWidth("45%");
+        rightPanel.setHeight("100%");
+        rightPanel.getStyle()
+                .set("border-left", "1px solid var(--lumo-contrast-10pct)")
+                .set("padding-left", "var(--lumo-space-m)");
+
+        HorizontalLayout content = new HorizontalLayout(leftPanel, rightPanel);
+        content.setWidthFull();
+        content.setHeight("100%");
+        content.setFlexGrow(1, leftPanel, rightPanel);
+
+        // Close button in footer - triggers save on close
+        Button closeBtn = new Button(msg("minioBrowserView.dialogClose"));
+        closeBtn.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        closeBtn.addClickListener(e -> {
+            try {
+                minioService.setBucketLifecycle(bucketName, ruleList);
+                NotificationUtil.success(msg("minioBrowserView.lifecycleConfigSaved"));
+            } catch (Exception ex) {
+                NotificationUtil.error(msg("minioBrowserView.lifecycleConfigSaveFailed") + ": " + ex.getMessage());
+            }
+            dialog.close();
+        });
+
+        dialog.add(content);
+        dialog.getFooter().add(closeBtn);
+        dialog.open();
+    }
+
+    /**
+     * Load rule data into form fields.
+     */
+    private void loadRuleToForm(MinioLifecycleRuleDto rule,
+                                Checkbox enabledField,
+                                TextField prefixField,
+                                RadioButtonGroup<String> expirationMode,
+                                TextField retentionDaysField,
+                                DatePicker expirationDatePicker,
+                                TextField noncurrentDaysField,
+                                Checkbox deleteMarkerField,
+                                TextField abortDaysField) {
+        enabledField.setValue(Boolean.TRUE.equals(rule.getEnabled()));
+        prefixField.setValue(rule.getPrefix() != null ? rule.getPrefix() : "");
+
+        if (rule.getExpirationDate() != null) {
+            expirationMode.setValue(msg("minioBrowserView.expirationModeAbsolute"));
+            expirationDatePicker.setValue(rule.getExpirationDate());
+            retentionDaysField.setValue("");
+        } else {
+            expirationMode.setValue(msg("minioBrowserView.expirationModeRelative"));
+            retentionDaysField.setValue(rule.getRetentionDays() != null ? String.valueOf(rule.getRetentionDays()) : "");
+            expirationDatePicker.setValue(null);
+        }
+
+        noncurrentDaysField.setValue(rule.getNoncurrentVersionExpirationDays() != null
+                ? String.valueOf(rule.getNoncurrentVersionExpirationDays()) : "");
+        deleteMarkerField.setValue(Boolean.TRUE.equals(rule.getExpiredObjectDeleteMarker()));
+        abortDaysField.setValue(rule.getAbortIncompleteMultipartUploadDays() != null
+                ? String.valueOf(rule.getAbortIncompleteMultipartUploadDays()) : "");
+    }
+
+    /**
+     * Show a simple confirm dialog with OK/Cancel.
+     */
+    private void showConfirmDialog(String message, Runnable onConfirm) {
+        Dialog dialog = new Dialog();
+        dialog.setHeaderTitle(msg("minioBrowserView.dialogConfirmTitle"));
+        dialog.setWidth("400px");
+
+        Span messageSpan = new Span(message);
+
+        Button confirmBtn = new Button(msg("minioBrowserView.dialogConfirm"), e -> {
+            dialog.close();
+            onConfirm.run();
+        });
+        confirmBtn.addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+
+        Button cancelBtn = new Button(msg("minioBrowserView.dialogCancel"), e -> dialog.close());
+
+        dialog.add(messageSpan);
+        dialog.getFooter().add(cancelBtn, confirmBtn);
+        dialog.open();
     }
 
     /**

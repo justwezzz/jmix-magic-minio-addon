@@ -2,8 +2,10 @@ package org.magic.jmix.addons.minio.service;
 
 import io.jmix.core.Messages;
 import io.minio.BucketExistsArgs;
+import io.minio.DeleteBucketLifecycleArgs;
 import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
+import io.minio.GetBucketLifecycleArgs;
 import io.minio.ListObjectsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
@@ -11,12 +13,21 @@ import io.minio.PutObjectArgs;
 import io.minio.RemoveBucketArgs;
 import io.minio.RemoveObjectArgs;
 import io.minio.RemoveObjectsArgs;
+import io.minio.SetBucketLifecycleArgs;
+import io.minio.messages.AbortIncompleteMultipartUpload;
 import io.minio.messages.Bucket;
+import io.minio.messages.Expiration;
 import io.minio.messages.Item;
+import io.minio.messages.LifecycleConfiguration;
+import io.minio.messages.LifecycleRule;
+import io.minio.messages.NoncurrentVersionExpiration;
+import io.minio.messages.RuleFilter;
+import io.minio.messages.Status;
 import org.magic.jmix.addons.minio.MinioProperties;
 import org.magic.jmix.addons.minio.dto.BatchDeleteResult;
 import org.magic.jmix.addons.minio.dto.BatchUploadResult;
 import org.magic.jmix.addons.minio.dto.MinioBucketDto;
+import org.magic.jmix.addons.minio.dto.MinioLifecycleRuleDto;
 import org.magic.jmix.addons.minio.dto.MinioTreeNode;
 import org.magic.jmix.addons.minio.dto.NodeType;
 import org.magic.jmix.addons.minio.dto.UploadRequest;
@@ -444,5 +455,84 @@ class MinioServiceMockTest {
 
         // then - 验证 Future 已完成（线程池已关闭的间接验证）
         assertThat(future.isDone()).isTrue();
+    }
+
+    // ==================== Lifecycle tests ====================
+
+    @Test
+    void getBucketLifecycle_shouldReturnRules_whenConfigExists() throws Exception {
+        // given
+        LifecycleRule rule = new LifecycleRule(
+                Status.ENABLED,
+                null,
+                new Expiration((io.minio.messages.ResponseDate) null, 30, null),
+                new RuleFilter("logs/"),
+                "rule1",
+                null,
+                null,
+                null
+        );
+        LifecycleConfiguration config = new LifecycleConfiguration(List.of(rule));
+
+        when(minioClient.getBucketLifecycle(any(GetBucketLifecycleArgs.class))).thenReturn(config);
+
+        // when
+        List<MinioLifecycleRuleDto> result = service.getBucketLifecycle("test-bucket");
+
+        // then
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getId()).isEqualTo("rule1");
+        assertThat(result.get(0).getEnabled()).isTrue();
+        assertThat(result.get(0).getPrefix()).isEqualTo("logs/");
+        assertThat(result.get(0).getRetentionDays()).isEqualTo(30);
+    }
+
+    @Test
+    void getBucketLifecycle_shouldReturnEmptyList_whenNoConfig() throws Exception {
+        // given - 模拟 NoSuchLifecycleConfiguration 错误
+        Exception noSuchConfig = new RuntimeException("NoSuchLifecycleConfiguration");
+        when(minioClient.getBucketLifecycle(any(GetBucketLifecycleArgs.class))).thenThrow(noSuchConfig);
+
+        // when
+        List<MinioLifecycleRuleDto> result = service.getBucketLifecycle("test-bucket");
+
+        // then
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void setBucketLifecycle_shouldCallSetWithRules() throws Exception {
+        // given
+        MinioLifecycleRuleDto dto = new MinioLifecycleRuleDto();
+        dto.setId("rule1");
+        dto.setEnabled(true);
+        dto.setPrefix("logs/");
+        dto.setRetentionDays(30);
+
+        // when
+        service.setBucketLifecycle("test-bucket", List.of(dto));
+
+        // then
+        verify(minioClient).deleteBucketLifecycle(any(DeleteBucketLifecycleArgs.class));
+        verify(minioClient).setBucketLifecycle(any(SetBucketLifecycleArgs.class));
+    }
+
+    @Test
+    void setBucketLifecycle_shouldOnlyDelete_whenRulesEmpty() throws Exception {
+        // when
+        service.setBucketLifecycle("test-bucket", List.of());
+
+        // then
+        verify(minioClient).deleteBucketLifecycle(any(DeleteBucketLifecycleArgs.class));
+        verify(minioClient, never()).setBucketLifecycle(any(SetBucketLifecycleArgs.class));
+    }
+
+    @Test
+    void clearBucketLifecycle_shouldCallDelete() throws Exception {
+        // when
+        service.clearBucketLifecycle("test-bucket");
+
+        // then
+        verify(minioClient).deleteBucketLifecycle(any(DeleteBucketLifecycleArgs.class));
     }
 }
