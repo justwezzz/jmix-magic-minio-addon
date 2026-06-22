@@ -70,6 +70,7 @@ import com.vaadin.flow.component.combobox.ComboBox;
 import com.vaadin.flow.component.datepicker.DatePicker;
 import com.vaadin.flow.component.radiobutton.RadioButtonGroup;
 import com.vaadin.flow.component.radiobutton.RadioGroupVariant;
+import com.vaadin.flow.component.textfield.NumberField;
 import org.magic.jmix.addons.minio.dto.MinioLifecycleRuleDto;
 
 import java.io.ByteArrayInputStream;
@@ -87,6 +88,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -801,20 +803,33 @@ public class MinioBrowserView extends StandardView {
         expirationMode.setValue(msg("minioBrowserView.expirationModeRelative"));
         expirationMode.addThemeVariants(RadioGroupVariant.LUMO_VERTICAL);
 
-        TextField retentionDaysField = new TextField(msg("minioBrowserView.ruleRetentionDays"));
+        NumberField retentionDaysField = new NumberField(msg("minioBrowserView.ruleRetentionDays"));
         retentionDaysField.setWidthFull();
+        retentionDaysField.setMin(1);
+        retentionDaysField.setMax(10000);
+        retentionDaysField.setStep(1);
 
         DatePicker expirationDatePicker = new DatePicker(msg("minioBrowserView.ruleExpirationDate"));
         expirationDatePicker.setWidthFull();
         expirationDatePicker.setVisible(false);
+        // 设置 locale 为当前系统语言
+        expirationDatePicker.setLocale(Locale.getDefault());
+        // 设置最小日期为明天
+        expirationDatePicker.setMin(LocalDate.now().plusDays(1));
 
-        TextField noncurrentDaysField = new TextField(msg("minioBrowserView.ruleNoncurrentDays"));
+        NumberField noncurrentDaysField = new NumberField(msg("minioBrowserView.ruleNoncurrentDays"));
         noncurrentDaysField.setWidthFull();
+        noncurrentDaysField.setMin(1);
+        noncurrentDaysField.setMax(10000);
+        noncurrentDaysField.setStep(1);
 
         Checkbox deleteMarkerField = new Checkbox(msg("minioBrowserView.ruleDeleteMarker"));
 
-        TextField abortDaysField = new TextField(msg("minioBrowserView.ruleAbortDays"));
+        NumberField abortDaysField = new NumberField(msg("minioBrowserView.ruleAbortDays"));
         abortDaysField.setWidthFull();
+        abortDaysField.setMin(1);
+        abortDaysField.setMax(10000);
+        abortDaysField.setStep(1);
 
         // Toggle visibility based on expiration mode
         expirationMode.addValueChangeListener(e -> {
@@ -898,21 +913,19 @@ public class MinioBrowserView extends StandardView {
             boolean isAbsolute = msg("minioBrowserView.expirationModeAbsolute").equals(expirationMode.getValue());
             rule.setExpirationDate(isAbsolute ? expirationDatePicker.getValue() : null);
             if (!isAbsolute) {
-                String daysText = retentionDaysField.getValue();
-                rule.setRetentionDays((daysText != null && !daysText.isEmpty()) ? Integer.parseInt(daysText) : null);
+                Double daysValue = retentionDaysField.getValue();
+                rule.setRetentionDays(daysValue != null ? daysValue.intValue() : null);
             } else {
                 rule.setRetentionDays(null);
             }
 
-            String ncDaysText = noncurrentDaysField.getValue();
-            rule.setNoncurrentVersionExpirationDays(
-                    (ncDaysText != null && !ncDaysText.isEmpty()) ? Integer.parseInt(ncDaysText) : null);
+            Double ncDaysValue = noncurrentDaysField.getValue();
+            rule.setNoncurrentVersionExpirationDays(ncDaysValue != null ? ncDaysValue.intValue() : null);
 
             rule.setExpiredObjectDeleteMarker(deleteMarkerField.getValue());
 
-            String abortText = abortDaysField.getValue();
-            rule.setAbortIncompleteMultipartUploadDays(
-                    (abortText != null && !abortText.isEmpty()) ? Integer.parseInt(abortText) : null);
+            Double abortValue = abortDaysField.getValue();
+            rule.setAbortIncompleteMultipartUploadDays(abortValue != null ? abortValue.intValue() : null);
 
             ruleGrid.getDataProvider().refreshAll();
             NotificationUtil.success(msg("minioBrowserView.ruleSaved"));
@@ -998,29 +1011,29 @@ public class MinioBrowserView extends StandardView {
                                 Checkbox enabledField,
                                 TextField prefixField,
                                 RadioButtonGroup<String> expirationMode,
-                                TextField retentionDaysField,
+                                NumberField retentionDaysField,
                                 DatePicker expirationDatePicker,
-                                TextField noncurrentDaysField,
+                                NumberField noncurrentDaysField,
                                 Checkbox deleteMarkerField,
-                                TextField abortDaysField) {
+                                NumberField abortDaysField) {
         enabledField.setValue(Boolean.TRUE.equals(rule.getEnabled()));
         prefixField.setValue(rule.getPrefix() != null ? rule.getPrefix() : "");
 
         if (rule.getExpirationDate() != null) {
             expirationMode.setValue(msg("minioBrowserView.expirationModeAbsolute"));
             expirationDatePicker.setValue(rule.getExpirationDate());
-            retentionDaysField.setValue("");
+            retentionDaysField.setValue(null);
         } else {
             expirationMode.setValue(msg("minioBrowserView.expirationModeRelative"));
-            retentionDaysField.setValue(rule.getRetentionDays() != null ? String.valueOf(rule.getRetentionDays()) : "");
+            retentionDaysField.setValue(rule.getRetentionDays() != null ? rule.getRetentionDays().doubleValue() : null);
             expirationDatePicker.setValue(null);
         }
 
         noncurrentDaysField.setValue(rule.getNoncurrentVersionExpirationDays() != null
-                ? String.valueOf(rule.getNoncurrentVersionExpirationDays()) : "");
+                ? rule.getNoncurrentVersionExpirationDays().doubleValue() : null);
         deleteMarkerField.setValue(Boolean.TRUE.equals(rule.getExpiredObjectDeleteMarker()));
         abortDaysField.setValue(rule.getAbortIncompleteMultipartUploadDays() != null
-                ? String.valueOf(rule.getAbortIncompleteMultipartUploadDays()) : "");
+                ? rule.getAbortIncompleteMultipartUploadDays().doubleValue() : null);
     }
 
     /**

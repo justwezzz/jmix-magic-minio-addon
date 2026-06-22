@@ -1278,6 +1278,11 @@ public class MinioService {
                             .build()
             );
 
+            // 无生命周期配置时返回空列表
+            if (config == null) {
+                return new ArrayList<>();
+            }
+
             List<MinioLifecycleRuleDto> result = new ArrayList<>();
             for (LifecycleRule rule : config.rules()) {
                 MinioLifecycleRuleDto dto = new MinioLifecycleRuleDto();

@@ -42,6 +42,7 @@
                           selectionMode="SINGLE" metaClass="minio_MinioBucketDto">
                     <contextMenu>
                         <item action="createBucketAction" icon="PLUS"/>
+                        <item action="lifecycleBucketAction" icon="CLOCK"/>
                         <item action="renameBucketAction" icon="EDIT"/>
                         <item action="deleteBucketAction" icon="TRASH"/>
                         <separator/>
