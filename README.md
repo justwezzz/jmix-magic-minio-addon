@@ -1,24 +1,24 @@
 # Jmix MinIO Addon
 
-涓€涓敤浜?Jmix 2.x 妗嗘灦鐨?MinIO 鏂囦欢瀛樺偍鎻掍欢锛屾彁渚涘畬鏁寸殑鏂囦欢娴忚鍣ㄧ晫闈€?
+一个用于 Jmix 2.x 框架的 MinIO 文件存储插件，提供完整的文件浏览器界面。
 
-> 馃摉 **瀹夸富椤圭洰闆嗘垚涓庝娇鐢ㄨ瑙?[USAGE.md](USAGE.md)**
+> 📖 **宿主项目集成与使用详见 [USAGE.md](USAGE.md)**
 
-## 鍔熻兘鐗规€?
+## 功能特性
 
-- **Bucket 绠＄悊**锛氬垱寤恒€佸垹闄ゃ€侀噸鍛藉悕 Bucket
-- **鏂囦欢娴忚**锛氭爲褰㈢粨鏋勬噿鍔犺浇娴忚鏂囦欢
-- **鏂囦欢棰勮**锛氬弻鍑绘枃鏈?鍥剧墖鍐呰仈棰勮锛圕odeEditor 鍙 / Image锛夛紝PDF/闊宠棰戠敤娴忚鍣ㄥ師鐢熼瑙堬紝鍏朵粬鏍煎紡寮规鎻愮ず涓嬭浇锛汣trl + 鍗曞嚮鏂囦欢鍚嶇敤娴忚鍣ㄦ柊鏍囩鎵撳紑
-- **鏂囦欢涓婁紶**锛氭敮鎸佸崟鏂囦欢鍜屾枃浠跺す涓婁紶锛堜繚鐣欑洰褰曠粨鏋勶級锛屽凡姹夊寲
-- **鏂囦欢涓嬭浇**锛氬崟鏂囦欢涓嬭浇鍜屽鏂囦欢 ZIP 鎵撳寘涓嬭浇
-- **鎼滅储鍔熻兘**锛氭父鏍囧垎椤垫噿鍔犺浇鎼滅储锛堟粴鍔ㄥ埌搴曡嚜鍔ㄥ姞杞斤紝鏂囦欢鍚嶅叧閿瓧楂樹寒锛?
-- **鎵归噺鎿嶄綔**锛氭壒閲忓垹闄ゃ€丼hift 鑼冨洿閫夋嫨銆佸彸閿彍鍗?
+- **Bucket 管理**：创建、删除、重命名 Bucket
+- **文件浏览**：树形结构懒加载浏览文件
+- **文件预览**：双击文本/图片内联预览（CodeEditor 只读 / Image），PDF/音视频用浏览器原生预览，其他格式弹框提示下载；Ctrl + 单击文件名用浏览器新标签打开
+- **文件上传**：支持单文件和文件夹上传（保留目录结构），已汉化
+- **文件下载**：单文件下载和多文件 ZIP 打包下载
+- **搜索功能**：游标分页懒加载搜索（滚动到底自动加载，文件名关键字高亮）
+- **批量操作**：批量删除、Shift 范围选择、右键菜单
 
-## 瀹夎
+## 安装
 
-### 1. 娣诲姞渚濊禆
+### 1. 添加依赖
 
-鍦ㄩ」鐩殑 `build.gradle` 涓坊鍔狅細
+在项目的 `build.gradle` 中添加：
 
 ```groovy
 dependencies {
@@ -26,72 +26,72 @@ dependencies {
 }
 ```
 
-### 2. 閰嶇疆 MinIO 杩炴帴
+### 2. 配置 MinIO 连接
 
-鍦?`application.properties` 涓厤缃細
+在 `application.properties` 中配置：
 
 ```properties
-# MinIO 杩炴帴锛堝繀濉級
-magic.minio.endpoint=http://localhost:9000      # MinIO 鏈嶅姟鍦板潃
-magic.minio.access-key=minioadmin               # 璁块棶瀵嗛挜
-magic.minio.secret-key=minioadmin               # 绉樺瘑瀵嗛挜
+# MinIO 连接（必填）
+magic.minio.endpoint=http://localhost:9000      # MinIO 服务地址
+magic.minio.access-key=minioadmin               # 访问密钥
+magic.minio.secret-key=minioadmin               # 秘密密钥
 
-# 涓嬭浇閰嶇疆锛堝彲閫夛級
-magic.minio.download.max-files=1000             # ZIP 鎵撳寘涓嬭浇鏈€澶ф枃浠舵暟
-magic.minio.download.max-size=100MB             # 鍗曟枃浠朵笅杞芥渶澶уぇ灏?
+# 下载配置（可选）
+magic.minio.download.max-files=1000             # ZIP 打包下载最大文件数
+magic.minio.download.max-size=100MB             # 单文件下载最大大小
 
-# 涓婁紶閰嶇疆锛堝彲閫夛級
-magic.minio.upload.max-size=50MB                # 鍗曟枃浠朵笂浼犳渶澶уぇ灏?
+# 上传配置（可选）
+magic.minio.upload.max-size=50MB                # 单文件上传最大大小
 ```
 
-## 浣跨敤鏂瑰紡
+## 使用方式
 
-### 鏂瑰紡涓€锛氶€氳繃鑿滃崟璁块棶
+### 方式一：通过菜单访问
 
-#### 鑷姩鍚堝苟鑿滃崟锛坈omposite-menu=true锛?
+#### 自动合并菜单（composite-menu=true）
 
-褰撳涓婚」鐩?`application.properties` 璁剧疆 `jmix.ui.composite-menu=true` 鏃讹紝鎻掍欢鑿滃崟浼氳嚜鍔ㄥ悎骞跺埌瀹夸富鑿滃崟涓€?
+当宿主项目 `application.properties` 设置 `jmix.ui.composite-menu=true` 时，插件菜单会自动合并到宿主菜单中。
 
-#### 鎵嬪姩娣诲姞鑿滃崟锛坈omposite-menu=false锛屾帹鑽愶級
+#### 手动添加菜单（composite-menu=false，推荐）
 
-褰?`jmix.ui.composite-menu=false` 鏃讹紝闇€瑕佹墜鍔ㄥ湪瀹夸富椤圭洰鐨?`menu.xml` 涓坊鍔犺彍鍗曢」锛?
+当 `jmix.ui.composite-menu=false` 时，需要手动在宿主项目的 `menu.xml` 中添加菜单项：
 
 ```xml
-<menu id="data-management" title="鏁版嵁绠＄悊" opened="true">
-    <item view="minio_BrowserView" title="MinIO 绠＄悊"/>
+<menu id="data-management" title="数据管理" opened="true">
+    <item view="minio_BrowserView" title="MinIO 管理"/>
 </menu>
 ```
 
-> **鎻愮ず**锛氭帹鑽愪娇鐢?`composite-menu=false` + 鎵嬪姩娣诲姞鑿滃崟锛岃繖鏍峰彲浠ョ簿纭帶鍒惰彍鍗曚綅缃拰灞傜骇锛岄伩鍏嶆棤鍏崇殑鎻掍欢鑿滃崟娣峰叆銆?
+> **提示**：推荐使用 `composite-menu=false` + 手动添加菜单，这样可以精确控制菜单位置和层级，避免无关的插件菜单混入。
 
-### 鏂瑰紡浜岋細鍦ㄨ鍥句腑寮曠敤
+### 方式二：在视图中引用
 
-濡傛灉闇€瑕佸湪鑷畾涔夎鍥句腑闆嗘垚 MinIO 鍔熻兘锛屽彲浠ョ户鎵挎垨缁勫悎 MinioBrowserView锛?
+如果需要在自定义视图中集成 MinIO 功能，可以继承或组合 MinioBrowserView：
 
 ```java
 @Route(value = "my-minio", layout = DefaultMainViewParent.class)
 @ViewController(id = "my_MinioView")
 @ViewDescriptor(path = "minio/minio-browser-view.xml")
 public class MyMinioView extends MinioBrowserView {
-    // 鑷畾涔夋墿灞曢€昏緫
+    // 自定义扩展逻辑
 }
 ```
 
-> 娉ㄦ剰锛歚layout` 搴斾娇鐢?`DefaultMainViewParent.class` 浠ヤ繚鎸佸簲鐢ㄧ殑涓荤晫闈㈠竷灞€銆?
+> 注意：`layout` 应使用 `DefaultMainViewParent.class` 以保持应用的主界面布局。
 
-### 鏂瑰紡涓夛細鐩存帴娉ㄥ叆鏈嶅姟
+### 方式三：直接注入服务
 
 ```java
 @Autowired
 private MinioService minioService;
 
-// Bucket 鎿嶄綔
+// Bucket 操作
 minioService.listBuckets();
 minioService.createBucket(name);
 minioService.deleteBucket(name);
 minioService.renameBucket(oldName, newName);
 
-// 鏂囦欢鎿嶄綔
+// 文件操作
 minioService.listObjects(bucket, prefix);
 minioService.uploadFile(bucket, objectName, inputStream, size);
 minioService.downloadFile(bucket, objectName);
@@ -99,15 +99,15 @@ minioService.deleteFile(bucket, objectName);
 minioService.createFolder(bucket, folderPath);
 minioService.batchDelete(bucket, items);
 
-// 杈呭姪鏂规硶
+// 辅助方法
 minioService.countFiles(bucket, folderPath);
 minioService.listFolderObjectPaths(bucket, folderPath);
 minioService.formatSize(bytes);
 ```
 
-## 瀹夊叏閰嶇疆
+## 安全配置
 
-鎻掍欢涓嶉瀹氫箟瑙掕壊銆傝鍦ㄥ涓婚」鐩腑鏍规嵁闇€瑕佽嚜瀹氫箟瑙掕壊鍜屾潈闄愶紝閫氳繃 `@ViewPolicy` 鎺у埗瑙嗗浘璁块棶锛?
+插件不预定义角色。请在宿主项目中根据需要自定义角色和权限，通过 `@ViewPolicy` 控制视图访问：
 
 ```java
 @ResourceRole(name = "MinIO User", code = "minio-user")
@@ -120,22 +120,22 @@ public interface MinioUserRole {
 
 ## i18n
 
-鎻掍欢鍐呯疆涓枃锛堥粯璁わ級鍜岃嫳鏂囧弻璇敮鎸侊紝浼氭牴鎹敤鎴?Locale 鑷姩鍒囨崲銆?
+插件内置中文（默认）和英文双语支持，会根据用户 Locale 自动切换。
 
-## 鎶€鏈爤
+## 技术栈
 
 - Jmix 2.8.1
 - Vaadin Flow
 - MinIO Java SDK 8.5.10
-- 闆跺閮ㄤ緷璧栵紙涓嶅惈 Lombok锛?
+- 零外部依赖（不含 Lombok）
 
-## 鏋勫缓
+## 构建
 
 ```bash
 ./gradlew build
 ```
 
-## 鍙戝竷鍒版湰鍦?Maven
+## 发布到本地 Maven
 
 ```bash
 ./gradlew publishToMavenLocal
