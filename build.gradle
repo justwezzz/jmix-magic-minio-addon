@@ -1,43 +1,51 @@
 plugins {
     id 'io.jmix' version '2.8.1' apply false
-    id 'java'
-    id 'maven-publish'
 }
 
-group = 'org.magic.addons'
+group = 'io.github.justwezzz'
 version = '0.0.1'
 
 subprojects {
-    apply plugin: 'java-library'
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/central' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://global.repo.jmix.io/repository/public' }
+    }
+
+    apply plugin: 'java'
     apply plugin: 'maven-publish'
+    apply plugin: 'signing'
     apply plugin: 'io.jmix'
 
-    group = 'org.magic.addons'
+    group = 'io.github.justwezzz'
     version = '0.0.1'
 
     java {
         sourceCompatibility = '17'
         targetCompatibility = '17'
+        withJavadocJar()
+        withSourcesJar()
     }
 
-    tasks.withType(JavaCompile).configureEach {
+    tasks.withType(JavaCompile) {
         options.encoding = 'UTF-8'
     }
 
-    tasks.withType(ProcessResources).configureEach {
+    tasks.withType(ProcessResources) {
         filteringCharset = 'UTF-8'
+    }
+
+    tasks.withType(Javadoc) {
+        options.encoding = 'UTF-8'
+        options.addStringOption('Xdoclint:none', '-quiet')
+        failOnError = false
     }
 
     jmix {
         bomVersion = '2.8.1'
-    }
-
-    repositories {
-        mavenLocal()
-        mavenCentral()
-        maven {
-            url 'https://global.repo.jmix.io/repository/public'
-        }
     }
 
     test {
@@ -48,7 +56,115 @@ subprojects {
         publications {
             mavenJava(MavenPublication) {
                 from components.java
+
+                versionMapping {
+                    usage('java-api') {
+                        fromResolutionOf('runtimeClasspath')
+                    }
+                    usage('java-runtime') {
+                        fromResolutionResult()
+                    }
+                }
+
+                pom {
+                    url = 'https://github.com/justwezzz/jmix-magic-minio-addon'
+
+                    licenses {
+                        license {
+                            name = 'The Apache License, Version 2.0'
+                            url = 'http://www.apache.org/licenses/LICENSE-2.0.txt'
+                        }
+                    }
+
+                    developers {
+                        developer {
+                            id = 'magic'
+                            name = 'magic'
+                            email = 'guofeng8023@gmail.com'
+                        }
+                    }
+
+                    scm {
+                        connection = 'scm:git:git://github.com/justwezzz/jmix-magic-minio-addon.git'
+                        developerConnection = 'scm:git:ssh://github.com/justwezzz/jmix-magic-minio-addon.git'
+                        url = 'https://github.com/justwezzz/jmix-magic-minio-addon'
+                    }
+                }
             }
         }
+    }
+
+    signing {
+        sign publishing.publications.mavenJava
+    }
+}
+
+// ========================================
+// Central Portal 发布打包任务
+// ========================================
+
+tasks.register('createCentralBundle') {
+    description = 'Creates a ZIP bundle for Central Portal upload'
+    group = 'publishing'
+
+    dependsOn ':jmix-magic-addons-minio:publishToMavenLocal'
+    dependsOn ':jmix-magic-addons-minio-starter:publishToMavenLocal'
+
+    doLast {
+        def m2Repo = new File(System.getProperty('user.home'), '.m2/repository')
+        def groupIdPath = 'io/github/justwezzz'
+        def version = '0.0.1'
+        def modules = ['jmix-magic-addons-minio', 'jmix-magic-addons-minio-starter']
+
+        def outputDir = file("${rootDir}/build/central")
+        def tempDir = file("${rootDir}/build/central-temp")
+        def zipFile = file("${outputDir}/central-bundle.zip")
+
+        delete(tempDir)
+        outputDir.mkdirs()
+
+        modules.each { module ->
+            def srcDir = file("${m2Repo}/${groupIdPath}/${module}/${version}")
+            def destDir = file("${tempDir}/${groupIdPath}/${module}/${version}")
+
+            if (!srcDir.exists()) {
+                throw new GradleException("Module directory not found: ${srcDir}")
+            }
+
+            destDir.mkdirs()
+
+            srcDir.eachFile { file ->
+                if (!file.name.endsWith('.md5') && !file.name.endsWith('.sha1')) {
+                    def destFile = new File(destDir, file.name)
+                    destFile.bytes = file.bytes
+
+                    def md5 = java.security.MessageDigest.getInstance('MD5')
+                    md5.update(file.bytes)
+                    def md5Hex = md5.digest().encodeHex().toString()
+                    new File(destDir, "${file.name}.md5").text = md5Hex
+
+                    def sha1 = java.security.MessageDigest.getInstance('SHA-1')
+                    sha1.update(file.bytes)
+                    def sha1Hex = sha1.digest().encodeHex().toString()
+                    new File(destDir, "${file.name}.sha1").text = sha1Hex
+
+                    logger.lifecycle("  Processed: ${file.name}")
+                }
+            }
+        }
+
+        ant.zip(destfile: zipFile) {
+            fileset(dir: tempDir)
+        }
+
+        delete(tempDir)
+
+        def zipSizeKB = Math.round(zipFile.length() / 1024)
+        logger.lifecycle("")
+        logger.lifecycle("=== Bundle Created Successfully ===")
+        logger.lifecycle("Location: ${zipFile}")
+        logger.lifecycle("Size: ${zipSizeKB} KB")
+        logger.lifecycle("")
+        logger.lifecycle("Next step: Upload to https://central.sonatype.com")
     }
 }

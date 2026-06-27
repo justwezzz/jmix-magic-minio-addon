@@ -1,10 +1,24 @@
 plugins {
-    id 'java'
+    id 'java-library'
+    id 'io.jmix'
 }
 
+group = 'io.github.justwezzz'
 archivesBaseName = 'jmix-magic-addons-minio-starter'
 
 dependencies {
     api project(':jmix-magic-addons-minio')
     implementation 'org.springframework.boot:spring-boot-autoconfigure'
+}
+
+// 模块特定的 POM 信息
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            pom {
+                name = 'Jmix Magic Addons Minio Starter'
+                description = 'Jmix Minio 插件的 Spring Boot Starter，提供自动配置支持。'
+            }
+        }
+    }
 }

@@ -57,3 +57,7 @@ $RECYCLE.BIN/
 #Claude Code Config
 .claude/
 docs/
+
+# Ãô¸ĞÅäÖÃÎÄ¼ş
+gradle.properties
+local.properties

@@ -1,7 +1,9 @@
 plugins {
+    id 'java-library'
     id 'io.jmix'
 }
 
+group = 'io.github.justwezzz'
 archivesBaseName = 'jmix-magic-addons-minio'
 
 dependencies {
@@ -12,8 +14,8 @@ dependencies {
     api 'io.jmix.security:jmix-security-flowui-starter'
     api 'io.minio:minio:8.5.10'
 
-    // Core Addon
-    api 'org.magic.addons:jmix-magic-addons-core-starter:0.0.1'
+    // Core Addon - 更新为新坐标
+    api 'io.github.justwezzz:jmix-magic-addons-core-starter:0.0.1'
 
     implementation 'org.springframework.boot:spring-boot-autoconfigure'
 
@@ -23,4 +25,16 @@ dependencies {
     testImplementation 'org.mockito:mockito-core'
     testImplementation 'org.mockito:mockito-junit-jupiter'
     testImplementation 'org.assertj:assertj-core'
+}
+
+// 模块特定的 POM 信息
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            pom {
+                name = 'Jmix Magic Addons Minio'
+                description = 'Jmix Minio 文件存储插件，提供 MinIO 对象存储集成支持。'
+            }
+        }
+    }
 }

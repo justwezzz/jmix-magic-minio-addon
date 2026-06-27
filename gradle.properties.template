@@ -1,0 +1,26 @@
+# Maven Central 发布配置
+# 请将以下配置添加到 ~/.gradle/gradle.properties
+
+# ========================================
+# Sonatype Central Portal 认证
+# ========================================
+# 1. 登录 https://central.sonatype.com
+# 2. 点击右上角用户名 -> View Account
+# 3. Generate User Token
+# 4. 将 Token Username/Password 填入下方
+
+sonatypeCentralUsername=你的Token用户名
+sonatypeCentralPassword=你的Token密码
+
+# ========================================
+# GPG 签名配置
+# ========================================
+# 1. 安装 Gpg4win 或 GnuPG
+# 2. 生成密钥: gpg --full-generate-key
+# 3. 查看密钥: gpg --list-keys
+# 4. 发布公钥: gpg --keyserver keyserver.ubuntu.com --send-keys <key-id>
+# 5. 导出私钥: gpg --armor --export-secret-keys > secring.gpg
+
+signing.keyId=你的KeyID后8位
+signing.password=你的GPG密码
+signing.secretKeyRingFile=C\:\\Users\\你的用户名\\.gnupg\\secring.gpg
