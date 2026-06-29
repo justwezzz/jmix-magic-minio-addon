@@ -95,6 +95,8 @@ subprojects {
     }
 
     signing {
+        // 仅在发布到 Maven Central 时需要签名，本地发布跳过
+        required { gradle.taskGraph.hasTask('publishToSonatype') }
         sign publishing.publications.mavenJava
     }
 }
