@@ -2,6 +2,8 @@
 
 本指南面向宿主项目开发人员，说明如何集成和使用 MinIO 文件存储插件。
 
+> **[English Documentation](USAGE_EN.md)**
+
 ---
 
 ## 目录

@@ -2,7 +2,7 @@
 
 一个用于 Jmix 2.x 框架的 MinIO 文件存储插件，提供完整的文件浏览器界面。
 
-> 📖 **宿主项目集成与使用详见 [USAGE.md](USAGE.md)**
+> 📖 **宿主项目集成与使用详见 [USAGE.md](USAGE.md)** | **[English Documentation](README_EN.md)**
 
 ## 功能特性
 
